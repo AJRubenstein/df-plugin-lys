@@ -34,6 +34,11 @@ export interface LysData {
     geometry: THREE.BufferGeometry;
     /** All geometry blobs parsed from the .lys archive, keyed by filename stem (e.g. "o15" for "o15.bin"). */
     geometriesByName: Map<string, THREE.BufferGeometry>;
+    /**
+     * Primary (non-hollowing) geometry stems in manifest-file order (ascending by offset).
+     * Used to assign geometries to scene objects when per-object field matching fails.
+     */
+    geometryOrder: string[];
     sceneData: any; // Decoded MessagePack data
     /** True when the primary geometry was parsed via the legacy unindexed path (stride-48 binary). */
     isLegacyGeometry: boolean;
@@ -213,17 +218,30 @@ export class LysParser {
             throw new Error('LysParser: No parseable geometry .bin payloads found');
         }
 
+        // Build geometry stems in manifest order (allGeomBlobs preserves JSON key order).
+        // Filter to only successfully-parsed, non-hollowing entries so callers can use
+        // position in this list to assign geometry to scene objects by their sort order.
+        const geometryOrder: string[] = [];
+        for (const [stem] of allGeomBlobs) {
+            if (stem.toLowerCase().endsWith('_hollowing')) continue;
+            if (geometriesByName.has(stem) || geometriesByName.has(stem.toLowerCase())) {
+                geometryOrder.push(stem);
+            }
+        }
+
         const sceneObjectIds = Object.keys(sceneData?.objects?.present?.byId ?? {});
         console.log('[LysParser][debug] parse summary', {
             sceneObjectCount: sceneObjectIds.length,
             sceneObjectIds,
             geometryStemCount: geometriesByName.size,
             geometryStems: [...geometriesByName.keys()],
+            geometryOrder,
         });
 
         return {
             geometry,
             geometriesByName,
+            geometryOrder,
             sceneData,
             isLegacyGeometry,
         };

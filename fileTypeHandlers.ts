@@ -259,6 +259,17 @@ function resolveObjectGeometryMatch(
     return { geometry: direct, matchSource: 'object-id', matchKey: objId };
   }
 
+  // Lychee stores the geometry UUID in obj.properties.hash for multi-model scenes.
+  const propertiesHash = typeof (obj as any)?.properties?.hash === 'string'
+    ? normalizeGeometryLookupKey((obj as any).properties.hash)
+    : null;
+  if (propertiesHash) {
+    const byHash = geometriesByName.get(propertiesHash) ?? geometriesByName.get(propertiesHash.toLowerCase());
+    if (byHash) {
+      return { geometry: byHash, matchSource: 'properties-hash', matchKey: propertiesHash };
+    }
+  }
+
   const candidates = new Set<string>();
   const pushCandidate = (v: unknown) => {
     if (v == null) return;
@@ -570,6 +581,39 @@ export async function importLysFile(
       matchKey: o.matchKey ?? null,
       geometryVertexCount: o.geometry.getAttribute('position')?.count ?? 0,
     })));
+  }
+
+  // -----------------------------------------------------------------------
+  // Manifest-order geometry assignment fallback.
+  //
+  // When per-object field matching fails for all objects (every entry uses the
+  // single-shared-geometry-fallback — i.e. all get model 1's mesh), and the
+  // manifest recorded at least as many geometry files as there are scene objects,
+  // assign by position: geometryOrder[i] → objectsWithGeometry[i].
+  //
+  // This works because Lychee writes geometry files to the manifest in the same
+  // order it serializes objects in scene.bin. Object.entries() over the decoded
+  // scene data preserves that serialization order, so objectsWithGeometry[i]
+  // corresponds to geometryOrder[i] without any additional sorting.
+  //
+  // NOTE: do NOT sort objectsWithGeometry by numeric object ID here — that breaks
+  // files where Lychee's creation order differs from internal ID order (e.g. a
+  // scene where object "o3" was created before "o2").
+  // -----------------------------------------------------------------------
+  if (
+    objectsWithGeometry.length > 1 &&
+    data.geometryOrder.length >= objectsWithGeometry.length &&
+    objectsWithGeometry.every((o) => o.matchSource === 'single-shared-geometry-fallback')
+  ) {
+    objectsWithGeometry.forEach((entry, idx) => {
+      const stem = data.geometryOrder[idx];
+      const geom = data.geometriesByName.get(stem) ?? data.geometriesByName.get(stem.toLowerCase());
+      if (geom) {
+        entry.geometry = geom;
+        entry.matchSource = 'manifest-order-assignment';
+        entry.matchKey = stem;
+      }
+    });
   }
 
   // -----------------------------------------------------------------------
