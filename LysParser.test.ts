@@ -139,6 +139,35 @@ describe('LysParser.parseLegacyGeometry', () => {
   });
 });
 
+function buildLysFile(stems: string[]): File {
+  const blobs = new Map<string, ArrayBuffer>();
+  for (const stem of stems) {
+    blobs.set(stem, buildGeometryBlob());
+  }
+
+  const mangoFiles: Record<string, { offset: number; size: number }> = {};
+  let offset = 0;
+  for (const [stem, blob] of blobs) {
+    mangoFiles[`${stem}.bin`] = { offset, size: blob.byteLength };
+    offset += blob.byteLength;
+  }
+
+  const manifestStr = JSON.stringify({ version: '1', mangoFiles });
+  const manifestBytes = new TextEncoder().encode(manifestStr);
+
+  const fullBuffer = new Uint8Array(manifestBytes.byteLength + 1 + offset);
+  fullBuffer.set(manifestBytes, 0);
+  fullBuffer[manifestBytes.byteLength] = 0; // null padding — dataStart scan skips this
+
+  let dataOffset = manifestBytes.byteLength + 1;
+  for (const [, blob] of blobs) {
+    fullBuffer.set(new Uint8Array(blob), dataOffset);
+    dataOffset += blob.byteLength;
+  }
+
+  return new File([fullBuffer], 'test.lys', { type: 'application/octet-stream' });
+}
+
 describe('LysParser.parseGeometry', () => {
   it('parses geometry payloads that declare header length larger than 20 bytes', () => {
     const geometry = (LysParser as any).parseGeometry(buildGeometryBlob({ headerLength: 24 }));
@@ -167,5 +196,58 @@ describe('LysParser.parseGeometry', () => {
         return true;
       },
     );
+  });
+});
+
+describe('LysParser.parse - geometryOrder', () => {
+  it('lists non-hollowing stems in manifest insertion order', async () => {
+    const file = buildLysFile(['o1', 'o1_hollowing', 'o2']);
+    const result = await LysParser.parse(file);
+    assert.deepStrictEqual(result.geometryOrder, ['o1', 'o2'],
+      'geometryOrder should exclude _hollowing stems and preserve manifest insertion order');
+  });
+
+  it('returns a single-element geometryOrder for a lone geometry stem', async () => {
+    const file = buildLysFile(['o15']);
+    const result = await LysParser.parse(file);
+    assert.deepStrictEqual(result.geometryOrder, ['o15']);
+  });
+
+  it('preserves insertion order even when stems appear non-alphabetically in manifest', async () => {
+    const file = buildLysFile(['o3', 'o1', 'o2']);
+    const result = await LysParser.parse(file);
+    assert.deepStrictEqual(result.geometryOrder, ['o3', 'o1', 'o2'],
+      'geometryOrder must follow manifest order, not sort stems by name or ID');
+  });
+
+  it('excludes all _hollowing variants when only hollowing stems are present', async () => {
+    const file = buildLysFile(['o1_hollowing']);
+    const result = await LysParser.parse(file);
+    // The hollowing blob is still used as geometry fallback, but must not appear in geometryOrder
+    assert.deepStrictEqual(result.geometryOrder, []);
+  });
+
+  it('excludes stems whose binary payload fails to parse', async () => {
+    // Build manifest manually so one blob is truncated (will throw in parseGeometry)
+    const goodBlob = buildGeometryBlob();
+    const badBlob = new ArrayBuffer(8); // below minimum 20-byte header — will be rejected
+
+    const mangoFiles = {
+      'good.bin': { offset: 0, size: goodBlob.byteLength },
+      'bad.bin': { offset: goodBlob.byteLength, size: badBlob.byteLength },
+    };
+    const manifestStr = JSON.stringify({ version: '1', mangoFiles });
+    const manifestBytes = new TextEncoder().encode(manifestStr);
+
+    const totalDataSize = goodBlob.byteLength + badBlob.byteLength;
+    const fullBuffer = new Uint8Array(manifestBytes.byteLength + 1 + totalDataSize);
+    fullBuffer.set(manifestBytes, 0);
+    fullBuffer[manifestBytes.byteLength] = 0;
+    fullBuffer.set(new Uint8Array(goodBlob), manifestBytes.byteLength + 1);
+    fullBuffer.set(new Uint8Array(badBlob), manifestBytes.byteLength + 1 + goodBlob.byteLength);
+
+    const result = await LysParser.parse(new File([fullBuffer], 'test.lys'));
+    assert.deepStrictEqual(result.geometryOrder, ['good'],
+      'Stems whose binary payload cannot be parsed should not appear in geometryOrder');
   });
 });

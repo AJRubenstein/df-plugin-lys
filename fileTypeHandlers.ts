@@ -193,7 +193,7 @@ export type LysImportOptions = {
  * - `o15.bin` -> `o15`
  * - `models/o15.BIN` -> `o15`
  */
-function normalizeGeometryLookupKey(raw: string): string {
+export function normalizeGeometryLookupKey(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   const lower = trimmed.toLowerCase();
@@ -246,10 +246,11 @@ function getSingleNormalizedGeometry(
  *
  * Match priority:
  * 1) direct object id key
- * 2) object metadata candidate fields (mesh/model/file/hash-like keys)
- * 3) single-geometry fallback
+ * 2) properties.hash (Lychee UUID field for multi-model scenes)
+ * 3) object metadata candidate fields (mesh/model/file/hash-like keys)
+ * 4) single-geometry fallback
  */
-function resolveObjectGeometryMatch(
+export function resolveObjectGeometryMatch(
   objId: string,
   obj: any,
   geometriesByName: Map<string, THREE.BufferGeometry>,
