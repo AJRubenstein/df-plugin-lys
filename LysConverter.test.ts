@@ -1914,4 +1914,103 @@ describe('LysConverter', () => {
         assert.ok(cone.normal.y > 0.9, 'Cone axis should align to transformed tip normal direction (toward +Y)');
         assert.ok(Math.abs(cone.normal.z) < 0.2, 'Cone axis should no longer remain near raw +Z after rotation');
     });
+
+    it('should not move a branch attach knot when a leaf attaches to that branch', () => {
+        // Regression for Hollowed_ISOLATED_Scene: a branch (s4859) whose authored
+        // base sits BELOW its host trunk's (s5136) shaft. Projecting the base onto
+        // the trunk clamps to the shaft endpoint (t≈0) with a large Z-dominated
+        // error, so the importer preserves the authored base for fidelity. A leaf
+        // (s5135) parented to the branch must NOT change that decision — before the
+        // fix, hasChildren(branch) disabled the preserve path and the branch knot
+        // snapped ~31mm up the trunk. The branch must land identically with and
+        // without the leaf present.
+        const OBJECT = {
+            id: 'o50',
+            center: { x: 9.792455673217773, y: 39.065948486328125, z: 30.96359634399414 },
+            formerCenter: { x: 9.792455673217773, y: 39.065948486328125, z: 30.96359634399414 },
+            position: { x: 0, y: 0, z: 5 },
+            rotation: { x: 75.00000000000001, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+        };
+        const TRUNK = {
+            id: 's5136', type: 1, objectIdTip: 'o50', objectIdBase: 'o50',
+            parentId: [], parentBaseId: null, parentTipId: null,
+            base: { x: -5, y: -15, z: 0 },
+            tip: { x: -2.7555654048919678, y: 27.071695327758817, z: 22.82109832763672 },
+            baseNormal: { x: 0, y: 0, z: 1 },
+            tipNormal: { x: -0.16693613943482447, y: -0.9340257972250631, z: -0.3157976178958327 },
+            settings: {
+                tip: { diameter: 1, pointDiameter: 0.35, length: 3.5 },
+                base: { joinDiameter: 1, joinLength: 71.43045162357062 },
+                baseTip: { diameter: 1, pointDiameter: 0.35, length: 3.5 },
+            },
+        };
+        const BRANCH = {
+            id: 's4859', type: 1, isBaseTip: true, objectIdTip: 'o50', objectIdBase: 'o50',
+            parentId: [], parentBaseId: 's5136', parentTipId: null,
+            base: { x: -5, y: -36.91765433147357, z: 5.63708704158158 },
+            tip: { x: -5.446412086486816, y: -30.784194946289062, z: 4.225971221923828 },
+            baseNormal: { x: -0.11351470582183099, y: 0.8636517848723764, z: -0.4911415336223784 },
+            tipNormal: { x: 0.028556739004918865, y: -0.9992764871002268, z: -0.02512001166471804 },
+            settings: {
+                tip: { diameter: 1, pointDiameter: 0.35, length: 3.5 },
+                base: { joinDiameter: 1, joinLength: 10.288107916279905 },
+                baseTip: { diameter: 1, pointDiameter: 0.35, length: 0.7536163934269585 },
+            },
+        };
+        const LEAF = {
+            id: 's5135', type: 1, mini: true, isBaseTip: true, objectIdTip: 'o50', objectIdBase: 'o50',
+            parentId: [], parentBaseId: 's4859', parentTipId: null,
+            base: { x: -5.276940528149155, y: -34.810612959980034, z: 4.4388546651452145 },
+            tip: { x: -4.8220319747924805, y: -30.770957946777344, z: 3.3288135528564453 },
+            baseNormal: { x: 0.10627204033032452, y: 0.9582906900421799, z: -0.26530210482111244 },
+            tipNormal: { x: -0.1440596548500094, y: -0.9728432081573111, z: -0.18117093637415263 },
+            settings: {
+                tip: { diameter: 1, pointDiameter: 0.3, length: 3.5943507856215184 },
+                base: { joinDiameter: 1, joinLength: 10.587141198664263 },
+                baseTip: { diameter: 1, pointDiameter: 1, length: 0.6146954213946009 },
+            },
+        };
+
+        const makeData = (supportsById: Record<string, unknown>) => ({
+            objects: { present: { byId: { o50: OBJECT } } },
+            supports: { present: { byId: supportsById } },
+        });
+
+        const withoutLeaf = LysConverter.convert(
+            makeData({ s5136: TRUNK, s4859: BRANCH }) as any,
+            createDefaultSettings(),
+        );
+        const withLeaf = LysConverter.convert(
+            makeData({ s5136: TRUNK, s4859: BRANCH, s5135: LEAF }) as any,
+            createDefaultSettings(),
+        );
+
+        assert.strictEqual(withoutLeaf.branches.length, 1, 'Expected one branch without the leaf');
+        assert.strictEqual(withLeaf.branches.length, 1, 'Expected one branch with the leaf');
+        assert.strictEqual(withLeaf.leaves.length, 1, 'Expected the leaf to import as a leaf');
+
+        const branchKnot = (out: typeof withLeaf, branchIndex = 0) => {
+            const branch = out.branches[branchIndex];
+            const knot = out.knots.find((k) => k.id === branch.parentKnotId);
+            assert.ok(knot, 'Branch must have a resolvable parent knot');
+            return knot!;
+        };
+
+        const knotNoLeaf = branchKnot(withoutLeaf);
+        const knotWithLeaf = branchKnot(withLeaf);
+
+        // The branch's authored base (world) sits well below the plate in this
+        // pre-placement frame (~ -29.2mm). The good case preserves it.
+        assert.ok(knotNoLeaf.pos.z < -25,
+            `Branch knot (no leaf) should preserve authored base Z, got ${knotNoLeaf.pos.z}`);
+
+        // The leaf must not move the branch knot. Before the fix it jumped to ~+2mm
+        // (the trunk shaft endpoint), a >25mm error.
+        assert.ok(Math.abs(knotWithLeaf.pos.z - knotNoLeaf.pos.z) < 0.5,
+            `Branch knot Z must match with/without leaf; got ${knotWithLeaf.pos.z} vs ${knotNoLeaf.pos.z}`);
+        assert.ok(Math.abs(knotWithLeaf.pos.x - knotNoLeaf.pos.x) < 0.5
+            && Math.abs(knotWithLeaf.pos.y - knotNoLeaf.pos.y) < 0.5,
+            'Branch knot XY must match with/without leaf');
+    });
 });

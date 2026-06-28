@@ -856,14 +856,25 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         // When projection clamps to shaft TIP (t>=0.98 with significant error), the authored attach
         // point typically lies on the parent contact cone -- valid in LycheeSlicer full base-to-tip
         // range but outside DragonFruit socketJoint boundary. Use authored position for fidelity.
-        // For base-side clamps, preserve authored position only for terminal supports (no children)
-        // where explicit endpoint hints indicate endpoint intent.
+        // For base-side clamps, preserve authored position when explicit endpoint hints indicate
+        // endpoint intent.
         const isClampedToShaftTip = attachT >= 0.98 && hasLargeAttachDelta;
+        // A base-side clamp whose error is dominated by Z means the authored attach point sits
+        // BELOW (or above) the host's socket boundary along the shaft axis -- it's a real endpoint
+        // that LycheeSlicer allows but DragonFruit clamps. That's true whether or not this support
+        // has children, so preserving it is safe even for a parent: e.g. a branch whose authored
+        // base is below its host trunk's shaft, hosting a leaf (Hollowed_ISOLATED_Scene). For
+        // supports WITH children we still require the clamp to be Z-dominated, so a sideways/off-
+        // shaft authored point (which would drag the children's host line off the shaft) is NOT
+        // preserved -- it falls back to the on-shaft projection. Terminal (childless) supports keep
+        // the looser leaf-like allowance they had before.
+        const clampIsZDominated = authoredAttachDeltaZ >= authoredAttachDeltaMm - 0.5;
         const isClampedToShaftBaseTerminal =
           attachT <= 0.02
           && hasLargeAttachDelta
-          && !isSupportWithChildren
-          && (!isLikelyLeafLike || authoredAttachDeltaZ <= 0.5);
+          && (isSupportWithChildren
+            ? clampIsZDominated
+            : (!isLikelyLeafLike || authoredAttachDeltaZ <= 0.5));
         const preserveAuthoredAttachPoint =
           endpointRoles.usedExplicitParentHint
           && (authoredAttachDeltaMm <= 0.5 || isClampedToShaftTip || isClampedToShaftBaseTerminal);
