@@ -768,6 +768,14 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         transformedTipNormal
       );
 
+      // The trunk's contact cone + socket are left EXACTLY as createContactAssembly
+      // produced them. The trunk renders correctly on its own; any reflection of the
+      // cone/socket either overshoots the model or (when the cone normal is flipped)
+      // detaches the cone in the real mesh-aware render. The kickstand's connection is
+      // positioned directly by its own hostKnot.pos (which renders verbatim), computed
+      // at the authored connection height in Phase 4E — it does not depend on mutating
+      // the trunk geometry. See .scratch/ks-fix-probe/GROUND_TRUTH.md.
+
       const segments: Segment[] = [];
       segments.push({
         id: uuidv4(),
@@ -1136,7 +1144,39 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const parentVisibleJoinLength = Number.isFinite(sourceSupportByLysId.get(parentId)?.settings?.base?.joinLength as number)
         ? Math.max(0, sourceSupportByLysId.get(parentId)?.settings?.base?.joinLength as number)
         : null;
-      const targetAttachHeight = Math.max(visibleJoinLength ?? 0, parentVisibleJoinLength ?? 0);
+
+      // LYS kickstands are rooted columns whose authored `joinLength` is the height
+      // of their OWN main joint (knee), measured straight up from the floored foot.
+      // Above that knee, the kickstand has a bent upper shaft that reaches over to the
+      // host (trunk) shaft. Lychee does NOT store the connection point explicitly — it
+      // is "just where the shafts meet", inferred from the support's own geometry.
+      //
+      // Decoding the connection HEIGHT (verified against four moved-joint LYS exports —
+      // see .scratch/ks-fix-probe/VERIFIED_FACTS.md and CONNECTION_PUZZLE.md):
+      //
+      //   connection_z = joinLength + horiz
+      //
+      // where `horiz` is the in-plane (XY) reach from the grounded foot column to the
+      // world-transformed contact tip. The upper shaft's length is authored in the
+      // model's LOCAL frame as a largely in-plane span; the model's tilt (here ~75° about
+      // X) folds that planar reach into vertical rise above the knee. The raw
+      // baseTip.length/tip.length scalars are far too small (a few mm) to be that rise —
+      // the rotated-tip XY reach (~14mm kick / ~19mm trunk) is the correct quantity, and
+      // it is symmetric across supports with opposite-sign tipNormal.z (unlike a
+      // tipNormal·length socket correction, which fits one support and breaks the other).
+      //
+      // Validated behavior: moving the connection grows `horiz` (connection rises);
+      // moving the bottom joint changes joinLength (connection shifts with the knee);
+      // moving the top joint touches only normals (connection unchanged).
+      const ownJoinLength = visibleJoinLength ?? 0;
+      // pB = transformObjectPoint(s.tip) — the world-frame contact tip computed above.
+      const upperShaftRiseMm = Math.hypot(
+        pB.x - rootBaseWorld.x,
+        pB.y - rootBaseWorld.y,
+      );
+      const targetAttachHeight = ownJoinLength > 1e-4
+        ? ownJoinLength + upperShaftRiseMm
+        : Math.max(visibleJoinLength ?? 0, parentVisibleJoinLength ?? 0);
 
       // LYS kickstands are rooted columns. When joinLength is authored,
       // seek host contact near that column height to avoid collapsing the host
@@ -1154,15 +1194,39 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       }
 
       let hostDiameterMm = shaftDefaults.diameterMm;
+      let hostSegmentForAttach: Segment | undefined;
       if (parentHost.kind === 'trunk') {
-        const hostSeg = parentHost.trunk.segments.find((seg) => seg.id === hostProjection.parentShaftId);
-        if (hostSeg?.diameter && Number.isFinite(hostSeg.diameter)) hostDiameterMm = hostSeg.diameter;
+        hostSegmentForAttach = parentHost.trunk.segments.find((seg) => seg.id === hostProjection.parentShaftId);
       } else {
-        const hostSeg = parentHost.branch.segments.find((seg: Segment) => seg.id === hostProjection.parentShaftId);
-        if (hostSeg?.diameter && Number.isFinite(hostSeg.diameter)) hostDiameterMm = hostSeg.diameter;
+        hostSegmentForAttach = parentHost.branch.segments.find((seg: Segment) => seg.id === hostProjection.parentShaftId);
+      }
+      if (hostSegmentForAttach?.diameter && Number.isFinite(hostSegmentForAttach.diameter)) {
+        hostDiameterMm = hostSegmentForAttach.diameter;
       }
 
-      const hostPos = hostProjection.pointOnLine;
+      let hostPos = hostProjection.pointOnLine;
+
+      // Place the connection at the authored CONNECTION HEIGHT, not at the projection's
+      // clamped point.
+      //
+      // The trunk renders correctly but its converter upper-segment data folds DOWNWARD
+      // (knee -> below) for a tilted model, so projecting the connection height onto it
+      // clamps the knot to the knee. We must NOT mutate the trunk (reflecting its cone
+      // overshoots / detaches in the real render). Instead, since the kickstand knot
+      // renders verbatim at hostKnot.pos, we position the connection directly at the
+      // authored height (joinLength + horiz) over the host shaft column: keep the host
+      // attach XY (the knee/shaft XY the projection found) and raise Z to the authored
+      // connection height. The knot still references the real trunk segment for locking,
+      // but renders where the support actually connects. (User: XY lines up in top-ortho;
+      // only Z was short — see GROUND_TRUTH.md.)
+      const authoredConnectionZ = rootBaseWorld.z + targetAttachHeight;
+      if (authoredConnectionZ > hostPos.z) {
+        hostPos = { x: hostPos.x, y: hostPos.y, z: authoredConnectionZ };
+        hostProjection = {
+          ...hostProjection,
+          pointOnLine: hostPos,
+        };
+      }
 
       let layoutOverrides: Partial<KickstandPlacementLayout> | undefined;
       if (Number.isFinite(visibleJoinLength as number) && (visibleJoinLength as number) > 1e-4) {
@@ -1199,6 +1263,90 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         },
         layoutOverrides,
       });
+
+      // -----------------------------------------------------------------------
+      // Importer-only authored-geometry override.
+      //
+      // buildKickstandData() synthesizes a generic ratio-based column whose joint
+      // heights are derived purely from the host rise. That discards the LYS
+      // kickstand's authored geometry, so multi-joint LYS kickstands import with
+      // the wrong knee height and merge into the model. Here we re-seat the
+      // synthesized joints onto the kickstand's OWN authored anatomy WITHOUT
+      // touching the shared builder or any global support code:
+      //
+      //   foot (floored, z=0)
+      //     -> grounded vertical column (baseNormal is (0,0,1) for LYS kickstands)
+      //     -> main knee at authored joinLength
+      //     -> bent upper shaft rising to the connection on the host shaft, at
+      //        z = joinLength + upperShaftRiseMm (the hostPos resolved above).
+      //
+      // Only the converted kickstand's own joints/segments are mutated in place.
+      if (ownJoinLength > 1e-4) {
+        const kneeZ = rootBaseWorld.z + ownJoinLength;
+        const segments = build.kickstand.segments;
+        const verticalXY = { x: rootBaseWorld.x, y: rootBaseWorld.y };
+
+        // buildKickstandData lays out segments as
+        //   [j0->j1, j1->j2, j2->j3 (upper), j3->host (terminal)].
+        // The host-facing joint is the terminal segment's bottomJoint (j3); every
+        // joint below it forms the grounded vertical column up to the knee. Identify
+        // j3 structurally (not by Z) so re-seating can't pick the wrong joint.
+        const terminalSeg = segments[segments.length - 1];
+        const hostFacing = terminalSeg?.bottomJoint;
+
+        // Gather the unique column joints (all joints except the host-facing one),
+        // ordered bottom-to-top by their original synthesized Z.
+        const columnJoints: Joint[] = [];
+        const seen = new Set<string>();
+        for (const seg of segments) {
+          for (const j of [seg.bottomJoint, seg.topJoint]) {
+            if (j?.id && j.id !== hostFacing?.id && !seen.has(j.id)) {
+              seen.add(j.id);
+              columnJoints.push(j);
+            }
+          }
+        }
+        columnJoints.sort((a, b) => a.pos.z - b.pos.z);
+
+        if (hostFacing && columnJoints.length >= 1) {
+          // Re-seat the grounded column joints straight up the foot XY to the knee.
+          const n = columnJoints.length;
+          columnJoints.forEach((j, idx) => {
+            const frac = n > 1 ? (idx + 1) / n : 1;
+            j.pos = {
+              x: verticalXY.x,
+              y: verticalXY.y,
+              z: rootBaseWorld.z + (kneeZ - rootBaseWorld.z) * frac,
+            };
+          });
+
+          // Above the knee the kickstand has TWO upper shafts: a LONGER lower one
+          // (knee -> second joint) and a SHORTER upper one (second joint -> connection).
+          // The connection sits at z = joinLength + upperShaftRiseMm = hostPos.z. The
+          // intermediate (host-facing) joint must therefore sit HIGH — most of the way
+          // up to the connection — so the lower shaft is long and the terminal shaft is
+          // short. Seating it flat at the knee (the previous behavior) made the lower
+          // shaft horizontal and the terminal shaft do all the rise, i.e. the two upper
+          // shafts came out swapped. Ground truth (GROUND_TRUTH.md): knee ~49.7,
+          // second joint ~61.5, connection ~64.3 => the second joint is ~0.78 of the
+          // rise from knee to connection.
+          const secondJointRiseRatio = 0.78;
+          const connectionZ = hostPos.z;
+          const secondJointZ = kneeZ + (connectionZ - kneeZ) * secondJointRiseRatio;
+          // The kickstand bends: the LOWER upper shaft (knee -> second joint) follows the
+          // authored upper-shaft direction (toward the transformed contact tip pB), then
+          // the SHORT terminal shaft (second joint -> connection) redirects onto the
+          // trunk. Aiming the second joint at the host (as a first cut did) made both
+          // upper shafts collinear — a straight diagonal with no real bend. Aim it at the
+          // authored tip XY instead so the two shafts angle differently (the real kink).
+          const towardTipBlend = 0.78;
+          hostFacing.pos = {
+            x: verticalXY.x + (pB.x - verticalXY.x) * towardTipBlend,
+            y: verticalXY.y + (pB.y - verticalXY.y) * towardTipBlend,
+            z: secondJointZ,
+          };
+        }
+      }
 
       result.kickstands.push(build);
       hostsByLysId.set(id, {

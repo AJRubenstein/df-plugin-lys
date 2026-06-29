@@ -623,6 +623,132 @@ describe('LysConverter', () => {
         assert.strictEqual(Math.abs(build.root.transform.pos.z) < 1e-6, true, 'Kickstand root should remain grounded on plate');
     });
 
+    it('should seat a tilted-model kickstand main knee at its joinLength and attach its connection to a real trunk segment', () => {
+        // Faithful reproduction of the real isolated LYS scene (model tilted 75° about X,
+        // lifted +5). Ground truth (user, layer slider — see
+        // .scratch/ks-fix-probe/GROUND_TRUTH.md):
+        //   - trunk knee ~55.5, trunk contact-cone tip ~75.55
+        //   - kickstand first joint ~49.7, connection to trunk ~64.3
+        // The importer used to build the trunk's SECOND shaft pointing DOWN (contact at
+        // ~z36, below the knee) and snap the kickstand attach to the trunk knee. The
+        // importer-only fix reflects the trunk contact above the knee and seats the
+        // kickstand connection at joinLength + (in-plane reach of the rotated tip) on the
+        // corrected trunk upper shaft.
+        const TILTED_SCENE = {
+            objects: {
+                present: {
+                    byId: {
+                        o51: {
+                            id: 'o51',
+                            formerCenter: { x: 9.792455673217773, y: 39.065948486328125, z: 30.96359634399414 },
+                            center: { x: 9.792455673217773, y: 39.065948486328125, z: 30.96359634399414 },
+                            position: { x: 0, y: 0, z: 5 },
+                            rotation: { x: 75, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        },
+                    },
+                },
+            },
+            supports: {
+                present: {
+                    byId: {
+                        s_trunk: {
+                            id: 's_trunk',
+                            type: 1,
+                            base: { x: 25, y: -10, z: 0 },
+                            tip: { x: 7.107245445251465, y: 29.136493682861328, z: 10.74805736541748 },
+                            baseNormal: { x: 0, y: 0, z: 1 },
+                            tipNormal: { x: 0.6979121432148324, y: -0.6535952782713053, z: -0.29280002147324785 },
+                            parentId: [],
+                            objectIdTip: 'o51',
+                            objectIdBase: 'o51',
+                            settings: {
+                                base: { joinDiameter: 1.0, joinLength: 55.7402246322698 },
+                                baseTip: { length: 0.8106199256499019, isStraight: true },
+                                tip: { diameter: 0.8, length: 3.5 },
+                                isStraight: true,
+                            },
+                        },
+                        s_kickstand: {
+                            id: 's_kickstand',
+                            type: 1,
+                            mini: false,
+                            base: { x: 15, y: -20, z: 0 },
+                            tip: { x: 17.418065935583048, y: 17.3923771005405, z: 11.17367290656193 },
+                            baseNormal: { x: 0, y: 0, z: 1 },
+                            tipNormal: { x: -0.5, y: -0.8124222244434794, z: 0.2999502112523152 },
+                            parentId: [],
+                            parentBaseId: null,
+                            parentTipId: 's_trunk',
+                            objectIdTip: 'o51',
+                            objectIdBase: 'o51',
+                            settings: {
+                                base: { joinDiameter: 1.0, joinLength: 49.728484562741 },
+                                baseTip: { length: 5.874817844544097, isStraight: true },
+                                tip: { diameter: 0.7, length: 3.5 },
+                                isStraight: true,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        const result = LysConverter.convert(TILTED_SCENE as any, createDefaultSettings());
+        assert.strictEqual(result.trunks.length, 1, 'Expected one trunk host');
+        assert.strictEqual(result.kickstands?.length ?? 0, 1, 'Expected one imported kickstand build');
+
+        // --- Kickstand: main knee sits at its OWN authored joinLength, over the foot XY. ---
+        const build = result.kickstands![0];
+        const kickKneeZ = 49.728484562741;
+        const columnTopJoint = build.kickstand.segments[1]?.topJoint;
+        assert.ok(columnTopJoint, 'Expected a kickstand column-top (knee) joint');
+        assert.ok(
+            Math.abs(columnTopJoint!.pos.z - kickKneeZ) < 1e-2 &&
+            Math.abs(columnTopJoint!.pos.x - 15) < 1e-2 &&
+            Math.abs(columnTopJoint!.pos.y - (-20)) < 1e-2,
+            `Kickstand main knee should sit at its authored joinLength (~${kickKneeZ.toFixed(2)}) over the foot XY, got ${JSON.stringify(columnTopJoint!.pos)}`,
+        );
+
+        // The grounded column rises straight up over the foot XY (vertical baseNormal).
+        const footColumnJoint = build.kickstand.segments[1]?.topJoint;
+        assert.ok(
+            Math.abs(footColumnJoint!.pos.x - 15) < 1e-2 && Math.abs(footColumnJoint!.pos.y - (-20)) < 1e-2,
+            'Kickstand lower column should rise vertically over the foot XY',
+        );
+
+        // The trunk is left UNTOUCHED (no reflection): for a tilted model the converter
+        // folds the contact below the knee. The kickstand connection is positioned by its
+        // own hostKnot.pos at the authored height, NOT by mutating the trunk.
+        const trunk = result.trunks[0];
+        assert.ok(trunk.contactCone, 'Trunk should have a contact cone');
+
+        // The kickstand's second joint and connection sit at the authored heights
+        // (~61.5 and ~64.3), ABOVE the kickstand's own knee — i.e. the connection is NOT
+        // collapsed/clamped down to the trunk knee.
+        const secondJoint = build.kickstand.segments[2]?.topJoint?.pos;
+        assert.ok(secondJoint, 'Expected a kickstand second joint');
+        assert.ok(
+            Math.abs(secondJoint!.z - 61.5) < 3,
+            `Kickstand second joint should land near ~61.5, got ${secondJoint!.z.toFixed(2)}`,
+        );
+        assert.ok(
+            build.hostKnot.pos.z > kickKneeZ && build.hostKnot.pos.z > 60,
+            `Kickstand connection (${build.hostKnot.pos.z.toFixed(2)}) should sit at the authored height (~64, above its own knee and the trunk knee), not clamped low`,
+        );
+        assert.ok(
+            Math.abs(build.hostKnot.pos.z - 64.3) < 3,
+            `Kickstand connection should land near the measured ~64.3, got ${build.hostKnot.pos.z.toFixed(2)}`,
+        );
+
+        // The connection knot still references a real trunk segment (for host locking).
+        const hostSeg = trunk.segments.find((s) => s.id === build.hostKnot.parentShaftId);
+        assert.ok(hostSeg, 'Kickstand connection knot should reference a real trunk segment');
+
+        // Root stays grounded.
+        assert.ok(Math.abs(build.root.transform.pos.z) < 1e-6, 'Kickstand root should remain grounded on plate');
+    });
+
     it('should correctly convert Braces (Type 0)', () => {
         const result = LysConverter.convert(MOCK_LYS_DATA, createDefaultSettings());
 
