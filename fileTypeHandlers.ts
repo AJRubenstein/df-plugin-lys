@@ -42,6 +42,12 @@ function bytesToBase64(bytes: Uint8Array): string {
  */
 export type LysImportPayload = {
   modelId: string;
+  /**
+   * Display name derived from the object's `name` field in the LYS scene data
+   * (e.g. "Archers_Assembled05"). Extension stripped if present. Undefined when
+   * the scene object has no name; the host falls back to the project filename.
+   */
+  objName?: string;
   geometry: THREE.BufferGeometry;
   transform: {
     position: THREE.Vector3;
@@ -305,6 +311,18 @@ function resolveObjectGeometryMatch(
   return { geometry: null, matchSource: 'none' };
 }
 
+/**
+ * Derive a display name from a LYS scene object's `name` field.
+ * Strips trailing 3D-model extensions so the host shows "Archers_Assembled05"
+ * rather than "Archers_Assembled05.stl". Returns undefined when the field is
+ * absent or blank so the host can fall back to the project filename.
+ */
+function deriveModelName(name: unknown): string | undefined {
+  const raw = (typeof name === 'string' ? name : '').trim();
+  if (!raw) return undefined;
+  return raw.replace(/\.(stl|obj|ply|3mf)$/i, '');
+}
+
 /** Normalize an LYS objectId field (may be string or number) to a string, or null. */
 function normLysObjectId(val: unknown): string | null {
   if (typeof val === 'string' && val.trim()) return val.trim();
@@ -467,6 +485,7 @@ function convertSingleObject(
 
   return {
     modelId: importedModelId,
+    objName: deriveModelName(rawObj.name),
     geometry: objGeometry,
     transform,
     supportData: dragonfruitData,
