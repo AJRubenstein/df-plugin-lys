@@ -1244,6 +1244,27 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
               connX = kneePos.x + (contactPos.x - kneePos.x) * tLine;
               connY = kneePos.y + (contactPos.y - kneePos.y) * tLine;
             }
+
+            // The reconstructed line above lands the knot on the trunk's NEAR FACE
+            // (the side the kickstand approaches from), so it sits one shaft-radius
+            // shy of the centerline and reads as "not snapped". Push it the rest of the
+            // way INTO the trunk — one trunk radius along the kickstand's horizontal
+            // approach direction (foot column XY -> connection XY) — so it lands on the
+            // centerline. Uses the host segment's actual diameter, so it scales per shaft
+            // (not a fixed fudge). (User: "on the face of the trunk normals", ~0.5mm for
+            // a 1mm shaft — see GROUND_TRUTH.md.)
+            const hostSeg = trunkSegs.find((seg) => seg.id === hostProjection.parentShaftId)
+              ?? trunkSegs[trunkSegs.length - 1];
+            const trunkRadius = (hostSeg?.diameter && Number.isFinite(hostSeg.diameter))
+              ? hostSeg.diameter / 2
+              : shaftDefaults.diameterMm / 2;
+            const approachX = connX - rootBaseWorld.x;
+            const approachY = connY - rootBaseWorld.y;
+            const approachLen = Math.hypot(approachX, approachY);
+            if (approachLen > 1e-6) {
+              connX += (approachX / approachLen) * trunkRadius;
+              connY += (approachY / approachLen) * trunkRadius;
+            }
           }
         }
         hostPos = { x: connX, y: connY, z: authoredConnectionZ };
