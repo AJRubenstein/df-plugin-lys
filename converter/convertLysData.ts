@@ -1206,22 +1206,47 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
       let hostPos = hostProjection.pointOnLine;
 
-      // Place the connection at the authored CONNECTION HEIGHT, not at the projection's
-      // clamped point.
+      // Place the connection where the RENDERED host shaft actually is at the authored
+      // connection height — not at the projection's clamped point.
       //
       // The trunk renders correctly but its converter upper-segment data folds DOWNWARD
-      // (knee -> below) for a tilted model, so projecting the connection height onto it
-      // clamps the knot to the knee. We must NOT mutate the trunk (reflecting its cone
-      // overshoots / detaches in the real render). Instead, since the kickstand knot
-      // renders verbatim at hostKnot.pos, we position the connection directly at the
-      // authored height (joinLength + horiz) over the host shaft column: keep the host
-      // attach XY (the knee/shaft XY the projection found) and raise Z to the authored
-      // connection height. The knot still references the real trunk segment for locking,
-      // but renders where the support actually connects. (User: XY lines up in top-ortho;
-      // only Z was short — see GROUND_TRUTH.md.)
+      // (knee -> below) for a tilted model, so a 3D projection of the connection height
+      // clamps the knot to the knee XY (the trunk's base column). That makes the
+      // kickstand's terminal shaft angle BACK toward the trunk base instead of onto the
+      // shaft, and leaves the knot off the slanted shaft. We must NOT mutate the trunk
+      // (reflecting its cone overshoots / detaches in the real render).
+      //
+      // The rendered trunk upper shaft runs from the KNEE (top of the first trunk
+      // segment) up to the CONTACT (contactCone.pos). Reconstruct that line and read the
+      // shaft's XY at the authored connection height, then seat the knot there. The knot
+      // renders verbatim at hostKnot.pos, so it lands on the shaft and the terminal shaft
+      // angles correctly toward it. (User: the 3rd shaft was angling back to the trunk
+      // base XY — see GROUND_TRUTH.md.)
       const authoredConnectionZ = rootBaseWorld.z + targetAttachHeight;
       if (authoredConnectionZ > hostPos.z) {
-        hostPos = { x: hostPos.x, y: hostPos.y, z: authoredConnectionZ };
+        let connX = hostPos.x;
+        let connY = hostPos.y;
+        if (parentHost.kind === 'trunk') {
+          const trunkSegs = parentHost.trunk.segments;
+          const kneePos = trunkSegs[0]?.topJoint?.pos;
+          const contactPos = parentHost.trunk.contactCone?.pos;
+          const trunkRoot = parentHost.root?.transform?.pos;
+          if (kneePos && contactPos && trunkRoot) {
+            // The rendered trunk upper shaft runs from the knee up to the contact. The
+            // contact's converter Z is folded DOWN for a tilted model, so reconstruct the
+            // contact's RENDERED height the same way the contact decodes: knee height +
+            // the in-plane (XY) reach of the contact from the trunk's grounded foot. The
+            // contact XY is authoritative (un-folded); only its Z needs lifting.
+            const trunkHoriz = Math.hypot(contactPos.x - trunkRoot.x, contactPos.y - trunkRoot.y);
+            const renderedContactZ = kneePos.z + trunkHoriz;
+            if (Math.abs(renderedContactZ - kneePos.z) > 1e-6) {
+              const tLine = (authoredConnectionZ - kneePos.z) / (renderedContactZ - kneePos.z);
+              connX = kneePos.x + (contactPos.x - kneePos.x) * tLine;
+              connY = kneePos.y + (contactPos.y - kneePos.y) * tLine;
+            }
+          }
+        }
+        hostPos = { x: connX, y: connY, z: authoredConnectionZ };
         hostProjection = {
           ...hostProjection,
           pointOnLine: hostPos,
