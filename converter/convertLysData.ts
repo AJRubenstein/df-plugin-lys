@@ -593,6 +593,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const twig: Twig = {
         id: uuidv4(),
         modelId: objectId,
+        importSourceLabel: id,
         segments: [segment],
         contactDiskA: {
           id: uuidv4(),
@@ -628,7 +629,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     // -----------------------------------------------------------------------
     // Phase 4B: convert floating two-cone sticks.
     // -----------------------------------------------------------------------
-    for (const { s } of stickCandidates) {
+    for (const { id, s } of stickCandidates) {
       if (!s.base || !s.tip) continue;
 
       const baseWorld = transformObjectPoint(s.base);
@@ -687,6 +688,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const stick: Stick = {
         id: uuidv4(),
         modelId: objectId,
+        importSourceLabel: id,
         segments: [segment],
         contactConeA,
         contactConeB,
@@ -722,6 +724,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const root: Roots = {
         id: rootId,
         modelId: objectId,
+        importSourceLabel: id,
         transform: {
           pos: { x: baseRefWorld.x, y: baseRefWorld.y, z: 0 },
           rot: { x: 0, y: 0, z: 0, w: 1 },
@@ -795,6 +798,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const trunk: Trunk = {
         id: uuidv4(),
         modelId: objectId,
+        importSourceLabel: id,
         rootId: rootId,
         segments: segments,
         contactCone: contactCone,
@@ -1050,6 +1054,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           const leaf: Leaf = {
             id: uuidv4(),
             modelId: objectId,
+            importSourceLabel: id,
             parentKnotId: knot.id,
             contactCone: contactCone,
           };
@@ -1071,6 +1076,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           const branch: Branch = {
             id: uuidv4(),
             modelId: objectId,
+            importSourceLabel: id,
             parentKnotId: knot.id,
             segments: [segment],
             contactCone: contactCone,
@@ -1532,6 +1538,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const brace: Brace = {
         id: uuidv4(),
         modelId: objectId,
+        importSourceLabel: id,
         startKnotId: knotA.id,
         endKnotId: knotB.id,
         profile: {
