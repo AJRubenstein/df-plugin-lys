@@ -193,7 +193,7 @@ export type LysImportOptions = {
  * - `o15.bin` -> `o15`
  * - `models/o15.BIN` -> `o15`
  */
-function normalizeGeometryLookupKey(raw: string): string {
+export function normalizeGeometryLookupKey(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   const lower = trimmed.toLowerCase();
@@ -246,10 +246,11 @@ function getSingleNormalizedGeometry(
  *
  * Match priority:
  * 1) direct object id key
- * 2) object metadata candidate fields (mesh/model/file/hash-like keys)
- * 3) single-geometry fallback
+ * 2) properties.hash (Lychee UUID field for multi-model scenes)
+ * 3) object metadata candidate fields (mesh/model/file/hash-like keys)
+ * 4) single-geometry fallback
  */
-function resolveObjectGeometryMatch(
+export function resolveObjectGeometryMatch(
   objId: string,
   obj: any,
   geometriesByName: Map<string, THREE.BufferGeometry>,
@@ -257,6 +258,17 @@ function resolveObjectGeometryMatch(
   const direct = geometriesByName.get(objId) ?? geometriesByName.get(objId.toLowerCase());
   if (direct) {
     return { geometry: direct, matchSource: 'object-id', matchKey: objId };
+  }
+
+  // Lychee stores the geometry UUID in obj.properties.hash for multi-model scenes.
+  const propertiesHash = typeof (obj as any)?.properties?.hash === 'string'
+    ? normalizeGeometryLookupKey((obj as any).properties.hash)
+    : null;
+  if (propertiesHash) {
+    const byHash = geometriesByName.get(propertiesHash) ?? geometriesByName.get(propertiesHash.toLowerCase());
+    if (byHash) {
+      return { geometry: byHash, matchSource: 'properties-hash', matchKey: propertiesHash };
+    }
   }
 
   const candidates = new Set<string>();
@@ -573,6 +585,39 @@ export async function importLysFile(
   }
 
   // -----------------------------------------------------------------------
+  // Manifest-order geometry assignment fallback.
+  //
+  // When per-object field matching fails for all objects (every entry uses the
+  // single-shared-geometry-fallback — i.e. all get model 1's mesh), and the
+  // manifest recorded at least as many geometry files as there are scene objects,
+  // assign by position: geometryOrder[i] → objectsWithGeometry[i].
+  //
+  // This works because Lychee writes geometry files to the manifest in the same
+  // order it serializes objects in scene.bin. Object.entries() over the decoded
+  // scene data preserves that serialization order, so objectsWithGeometry[i]
+  // corresponds to geometryOrder[i] without any additional sorting.
+  //
+  // NOTE: do NOT sort objectsWithGeometry by numeric object ID here — that breaks
+  // files where Lychee's creation order differs from internal ID order (e.g. a
+  // scene where object "o3" was created before "o2").
+  // -----------------------------------------------------------------------
+  if (
+    objectsWithGeometry.length > 1 &&
+    data.geometryOrder.length >= objectsWithGeometry.length &&
+    objectsWithGeometry.every((o) => o.matchSource === 'single-shared-geometry-fallback')
+  ) {
+    objectsWithGeometry.forEach((entry, idx) => {
+      const stem = data.geometryOrder[idx];
+      const geom = data.geometriesByName.get(stem) ?? data.geometriesByName.get(stem.toLowerCase());
+      if (geom) {
+        entry.geometry = geom;
+        entry.matchSource = 'manifest-order-assignment';
+        entry.matchKey = stem;
+      }
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // Multi-model path: each object gets an independent payload.
   // -----------------------------------------------------------------------
   if (objectsWithGeometry.length > 1) {
@@ -757,7 +802,7 @@ export async function importLysFile(
     }
   }
 
-  const finalMeshModifiers = LysConverter.convertHollowing(sceneDataForConvert, singleGeom, data.geometriesByName);
+  const finalMeshModifiers = LysConverter.convertHollowing(sceneDataForConvert, singleGeom, data.geometriesByName, data.isLegacyGeometry);
   console.log('[lys-import][debug] single-model meshModifiers:', finalMeshModifiers ? `hollowing=${!!finalMeshModifiers.hollowing} holes=${finalMeshModifiers.holePunches?.length ?? 0}` : 'undefined');
 
   // ── Physically hollow the geometry when the Rust backend is available ──
