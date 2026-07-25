@@ -6,7 +6,7 @@ import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { computeLowestZ } from '@/utils/geometry';
 import { eulerFromGlobalEuler, quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * Legacy hook-based LYS import path retained for compatibility with existing scene flows.
