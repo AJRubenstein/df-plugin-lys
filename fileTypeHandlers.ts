@@ -8,7 +8,7 @@ import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { computeLowestZ } from '@/utils/geometry';
 import { eulerFromGlobalEuler, quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
-import { generateUuid } from '@/utils/uuid';
+import { v4 as uuidv4 } from 'uuid';
 
 /** Base64-encode a typed array for cavity position storage. */
 function bytesToBase64(bytes: Uint8Array): string {
@@ -371,7 +371,7 @@ function convertSingleObject(
   lysGeometriesByName: Map<string, THREE.BufferGeometry>,
 ): LysImportPayload {
   // Stage 1: prepare filtered object-local scene payload.
-  const importedModelId = generateUuid();
+  const importedModelId = uuidv4();
 
   console.log('[lys-import][debug] convertSingleObject:start', {
     objId,
@@ -510,7 +510,7 @@ export async function importLysFile(
   if (!data.sceneData?.objects || !data.sceneData?.supports) {
     console.warn('[lys-import] No scene data found or invalid format');
     return {
-      modelId: generateUuid(),
+      modelId: uuidv4(),
       geometry: data.geometry,
       transform: {
         position: new THREE.Vector3(0, 0, 0),
@@ -694,7 +694,7 @@ export async function importLysFile(
     (targetObjId ? data.geometriesByName.get(targetObjId) ?? data.geometriesByName.get(targetObjId.toLowerCase()) : null)
     ?? data.geometry;
 
-  const importedModelId = generateUuid();
+  const importedModelId = uuidv4();
   let resolvedModelZ: number | null = null;
   const transform = {
     position: new THREE.Vector3(0, 0, 0),
