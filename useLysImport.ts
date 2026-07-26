@@ -15,10 +15,6 @@ import { v4 as uuidv4 } from 'uuid';
  * leaving scene insertion to the caller.
  */
 
-function generateImportId(): string {
-    return generateUuid();
-}
-
 /**
  * Normalizes object rotation for conversion phase.
  *
@@ -274,7 +270,7 @@ export function useLysImport() {
             console.log("[useLysImport] Converting Scene Data...");
             const settings = createDefaultSettings();
             let dragonfruitData = null;
-            const importedModelId = generateImportId();
+            const importedModelId = uuidv4;
             let resolvedModelZ: number | null = null;
             let lysTransform = {
                 position: new THREE.Vector3(0, 0, 0),
