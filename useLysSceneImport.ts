@@ -15,11 +15,7 @@ import { updateRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { loadStlGeometry, type GeometryWithBounds } from '@/hooks/useStlGeometry';
 import { getSettings } from '@/supports/Settings';
 import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
-import { generateUuid } from '@/utils/uuid';
-
-function generateImportId(): string {
-  return generateUuid();
-}
+import { v4 as uuidv4 } from 'uuid';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -233,7 +229,7 @@ export function useLysSceneImport() {
 
       // Stage 4: convert supports and load them into support state.
       console.log('[LysSceneImport] Converting supports...');
-      const importedModelId = generateImportId();
+      const importedModelId = uuidv4();
 
       // Fetch current global settings to use for conversion
       const currentSettings = getSettings();
