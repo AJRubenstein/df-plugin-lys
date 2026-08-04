@@ -841,10 +841,11 @@ export async function importLysFile(
       openFace: finalMeshModifiers.hollowing.openFace,
       drainHoles: [],
       previewCavityOnly: false,
-      // Skip expensive smoothing for import — the mesh already has a
-      // pre-computed cavity from Lychee and just needs a dumb boolean merge.
-      smoothInternalSurfaces: false,
-      internalChamferPasses: 0,
+      // Re-hollow with full smoothing — the Lychee pre-computed cavity is
+      // not used for the boolean merge, so we need the same Taubin + chamfer
+      // passes as native DF hollowing to avoid a blocky voxel-isosurface look.
+      smoothInternalSurfaces: true,
+      internalChamferPasses: 2,
     };
 
     try {

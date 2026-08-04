@@ -856,13 +856,14 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         // When projection clamps to shaft TIP (t>=0.98 with significant error), the authored attach
         // point typically lies on the parent contact cone -- valid in LycheeSlicer full base-to-tip
         // range but outside DragonFruit socketJoint boundary. Use authored position for fidelity.
-        // For base-side clamps, preserve authored position only for terminal supports (no children)
-        // where explicit endpoint hints indicate endpoint intent.
+        // For base-side clamps, preserve authored position when the branch has a meaningful shaft
+        // (not leaf-like); the DragonFruit trunk skeleton starts above the root, so branches whose
+        // base originates at raft level will naturally project-clamp to the lowest trunk segment
+        // start — using the authored position keeps the branch at its correct LYS location.
         const isClampedToShaftTip = attachT >= 0.98 && hasLargeAttachDelta;
         const isClampedToShaftBaseTerminal =
           attachT <= 0.02
           && hasLargeAttachDelta
-          && !isSupportWithChildren
           && (!isLikelyLeafLike || authoredAttachDeltaZ <= 0.5);
         const preserveAuthoredAttachPoint =
           endpointRoles.usedExplicitParentHint
