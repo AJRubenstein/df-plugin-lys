@@ -861,10 +861,23 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         // base originates at raft level will naturally project-clamp to the lowest trunk segment
         // start — using the authored position keeps the branch at its correct LYS location.
         const isClampedToShaftTip = attachT >= 0.98 && hasLargeAttachDelta;
+        // Leaf-like base clamps: the authored attach often sits BELOW the lowest trunk
+        // skeleton point (root top, where the clamp lands) but still ON the root pad
+        // (between the build plate z=0 and the root top — the root disk/cone occupies
+        // that region even though the skeleton does not). Clamping it up to t=0 pushes
+        // the knot above the leaf's tip and flips the leaf to dangle downward off the
+        // trunk base. Preserve the authored attach instead so the leaf rests on the
+        // root pad and points up, as authored in Lychee. Attach points below the build
+        // plate (z<0) or above the root top keep clamping — no root geometry exists
+        // there, so preserving would float the leaf knot.
+        const isLeafAttachOnRootRegion =
+          isLikelyLeafLike
+          && endpointRoles.attachPoint.z >= 0
+          && endpointRoles.attachPoint.z <= endpointRoles.attachProjection.pointOnLine.z;
         const isClampedToShaftBaseTerminal =
           attachT <= 0.02
           && hasLargeAttachDelta
-          && (!isLikelyLeafLike || authoredAttachDeltaZ <= 0.5);
+          && (!isLikelyLeafLike || authoredAttachDeltaZ <= 0.5 || isLeafAttachOnRootRegion);
         const preserveAuthoredAttachPoint =
           endpointRoles.usedExplicitParentHint
           && (authoredAttachDeltaMm <= 0.5 || isClampedToShaftTip || isClampedToShaftBaseTerminal);

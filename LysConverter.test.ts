@@ -244,7 +244,7 @@ describe('LysConverter', () => {
             'Terminal explicit base-side attach should preserve authored base-clamp knot Z');
     });
 
-    it('should keep leaf-like terminal base-clamped children projected to host (no floating leaf knot)', () => {
+    it('should preserve leaf-like terminal base-clamped authored attach that rests on the root pad', () => {
         const BASE_CLAMP_LEAFLIKE_DATA = {
             objects: {
                 present: {
@@ -305,9 +305,12 @@ describe('LysConverter', () => {
         const knot = result.knots.find((k) => k.id === leaf.parentKnotId);
         assert.ok(knot, 'Expected leaf parent knot for leaf-like terminal child');
 
-        // Should stay projected to host (around trunk first-segment start z=2), not preserved at z~0.203.
-        assert.ok(Math.abs((knot?.pos.z ?? 0) - 2) < 1e-3,
-            'Leaf-like terminal base-clamped child should keep projected host knot Z to avoid floating leaf knots');
+        // The authored attach (z~0.203) sits below the lowest trunk skeleton point
+        // (root top z=2) but on the root pad (z>=0). Preserve it so the leaf rests on
+        // the root pad pointing up, instead of clamping to the root top (which would
+        // flip the leaf to dangle downward).
+        assert.ok(Math.abs((knot?.pos.z ?? 0) - 0.20344101267939063) < 1e-6,
+            'Leaf-like base clamp resting on the root pad should preserve authored attach Z');
     });
 
     it('should preserve leaf-like terminal base-clamped authored attach when Z drift is small', () => {
@@ -378,7 +381,7 @@ describe('LysConverter', () => {
             'Leaf-like base clamp with small Z drift should preserve authored attach X');
     });
 
-    it('should not let explicit endpoint-ordering fallback override deliberate projected base clamp', () => {
+    it('should not let explicit endpoint-ordering fallback override preserved root-pad attach', () => {
         const BASE_CLAMP_ORDERING_GUARD_DATA = {
             objects: {
                 present: {
@@ -414,8 +417,10 @@ describe('LysConverter', () => {
                             id: 's_child_ordering_guard',
                             type: 1,
                             mini: false,
-                            // Mimics s85-like case: base clamped to host start (~z=2), large delta,
-                            // leaf-like geometry and tip below projected knot cause ordering sign flip.
+                            // Mimics s85-like case: authored attach on the root pad (z~0.203) below
+                            // the host start (~z=2), large delta, leaf-like geometry. The base clamp
+                            // now preserves the authored attach; the tip-below-knot ordering sign
+                            // flip must not override that deliberate decision.
                             base: { x: 0.9, y: 0.7, z: 0.20344101267939063 },
                             tip: { x: 1.05, y: 0.7, z: 1.2 },
                             parentId: ['s_root'],
@@ -440,9 +445,9 @@ describe('LysConverter', () => {
         const knot = result.knots.find((k) => k.id === leaf.parentKnotId);
         assert.ok(knot, 'Expected leaf parent knot in ordering-guard fixture');
 
-        // Must remain projected to host start, not overridden back to authored base by ordering fallback.
-        assert.ok(Math.abs((knot?.pos.z ?? 0) - 2) < 1e-3,
-            'Endpoint-ordering fallback should not override deliberate projected base clamp knot position');
+        // Must remain at the preserved root-pad attach, not moved by the ordering fallback.
+        assert.ok(Math.abs((knot?.pos.z ?? 0) - 0.20344101267939063) < 1e-6,
+            'Endpoint-ordering fallback should not override preserved root-pad attach knot position');
     });
 
     it('should fall back to parentBaseId/parentTipId host when explicit parentId is stale', () => {
