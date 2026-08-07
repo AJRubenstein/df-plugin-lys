@@ -1978,4 +1978,38 @@ describe('LysConverter.convertHollowing', () => {
         assert.strictEqual(result!.hollowing!.enabled, true,
             'Hollowing modifier should be enabled when sceneData sets enabled=true');
     });
+
+    function buildHoleScene(hole: Record<string, unknown>): any {
+        return {
+            holes: {
+                present: {
+                    byId: {
+                        h1: { id: 'h1', tip: { x: 0, y: 0, z: 0 }, settings: { type: 'cylinder', diameter: 4, depth: 5 }, ...hole },
+                    },
+                },
+            },
+        };
+    }
+
+    it('negates tipNormal for un-rotated holes (tipRotation null → outward normal)', () => {
+        // tipNormal points +X (outward); punch must drill -X (inward).
+        const result = LysConverter.convertHollowing(
+            buildHoleScene({ tipNormal: { x: 1, y: 0, z: 0 }, tipRotation: null }),
+        );
+        const punch = result?.holePunches?.[0];
+        assert.ok(punch, 'Expected a hole punch to be extracted');
+        assert.ok(punch!.direction[0] < -0.99,
+            `Un-rotated hole should drill along -tipNormal; got ${JSON.stringify(punch!.direction)}`);
+    });
+
+    it('uses tipNormal as-is for reoriented holes (tipRotation set → inward normal)', () => {
+        // For a tilted hole, tipNormal already points inward (+X here); do NOT negate.
+        const result = LysConverter.convertHollowing(
+            buildHoleScene({ tipNormal: { x: 1, y: 0, z: 0 }, tipRotation: { x: 10, y: 20, z: 30 } }),
+        );
+        const punch = result?.holePunches?.[0];
+        assert.ok(punch, 'Expected a hole punch to be extracted');
+        assert.ok(punch!.direction[0] > 0.99,
+            `Reoriented hole should drill along +tipNormal; got ${JSON.stringify(punch!.direction)}`);
+    });
 });

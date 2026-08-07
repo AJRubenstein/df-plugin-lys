@@ -487,9 +487,14 @@ export class LysConverter {
         }
 
         // LYS holes store position at `tip` (surface contact point) and
-        // direction at `tipNormal` (outward-pointing surface normal).
-        // The hole punch direction must point INWARD (into the model), so
-        // we negate the normal. Some variants use a 4x4 `stlMatrix` instead
+        // direction at `tipNormal`. The hole punch must drill INWARD (into the
+        // model). Lychee's `tipNormal` sign convention depends on whether the
+        // hole was reoriented: for un-rotated holes (`tipRotation == null`) it
+        // is the OUTWARD surface normal, so we negate it to drill inward; for
+        // holes the user tilted (`tipRotation` set) it already points INWARD
+        // (the drill axis), so we use it as-is. (Verified across
+        // Backhair_Whole.lys and Leg_L.lys — every mis-drilled hole was a
+        // `tipRotation`-set one.) Some variants use a 4x4 `stlMatrix` instead
         // — fall back to that, then to defaults.
         let pos = new THREE.Vector3(0, 0, 0);
         let dir = new THREE.Vector3(0, 0, -1);
@@ -498,7 +503,10 @@ export class LysConverter {
           pos.set(hole.tip.x, hole.tip.y, hole.tip.z);
           if (hole.tipNormal && typeof hole.tipNormal.x === 'number') {
             const n = new THREE.Vector3(hole.tipNormal.x, hole.tipNormal.y, hole.tipNormal.z);
-            if (n.lengthSq() > 1e-8) dir.copy(n.normalize().negate());
+            if (n.lengthSq() > 1e-8) {
+              n.normalize();
+              dir.copy(hole.tipRotation ? n : n.negate());
+            }
           }
         } else {
           const stlMatrix: number[] | undefined = hole.stlMatrix;
