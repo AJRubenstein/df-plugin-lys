@@ -2002,14 +2002,45 @@ describe('LysConverter.convertHollowing', () => {
             `Un-rotated hole should drill along -tipNormal; got ${JSON.stringify(punch!.direction)}`);
     });
 
-    it('uses tipNormal as-is for reoriented holes (tipRotation set → inward normal)', () => {
-        // For a tilted hole, tipNormal already points inward (+X here); do NOT negate.
+    it('resolves tilted-hole drill sign from geometry (frame-Z into the solid)', () => {
+        // Thin slab spanning z ∈ [-1, 1]; tip on the top face. tipRotation is
+        // identity, so the frame's Z axis is +Z — pointing OUT of the top. The
+        // geometry sign-resolver must flip it to -Z to drill into the slab.
+        const slab = new THREE.BoxGeometry(20, 20, 2); // centered: z ∈ [-1, 1]
         const result = LysConverter.convertHollowing(
-            buildHoleScene({ tipNormal: { x: 1, y: 0, z: 0 }, tipRotation: { x: 10, y: 20, z: 30 } }),
+            buildHoleScene({
+                tip: { x: 0, y: 0, z: 1 },
+                tipNormal: { x: 0, y: 0, z: 1 },
+                tipRotation: { x: 0, y: 0, z: 0 },
+            }),
+            slab,
         );
         const punch = result?.holePunches?.[0];
         assert.ok(punch, 'Expected a hole punch to be extracted');
-        assert.ok(punch!.direction[0] > 0.99,
-            `Reoriented hole should drill along +tipNormal; got ${JSON.stringify(punch!.direction)}`);
+        assert.ok(punch!.direction[2] < -0.99,
+            `Tilted hole should drill into the slab (-Z); got ${JSON.stringify(punch!.direction)}`);
+    });
+
+    it('drills an interior-anchored hole OUT through the near shell', () => {
+        // Thick block z ∈ [-5, 5] hollowed by a cavity void z ∈ [-3, 3], leaving a
+        // 2mm top shell (z ∈ [3, 5]). A drain hole anchored to the interior wall
+        // (tip just inside the void at z=2.9) with identity rotation has frame-Z
+        // = +Z. Because it is nearer the cavity than the outer surface, it must
+        // drill OUT through the near top shell (+Z), not into the far bulk (-Z).
+        const outer = new THREE.BoxGeometry(20, 20, 10); // z ∈ [-5, 5]
+        const cavity = new THREE.BoxGeometry(16, 16, 6); // z ∈ [-3, 3] (the void)
+        const result = LysConverter.convertHollowing(
+            buildHoleScene({
+                tip: { x: 0, y: 0, z: 2.9 },
+                tipNormal: { x: 0, y: 0, z: 1 },
+                tipRotation: { x: 0, y: 0, z: 0 },
+            }),
+            outer,
+            new Map([['abc_hollowing', cavity]]),
+        );
+        const punch = result?.holePunches?.[0];
+        assert.ok(punch, 'Expected a hole punch to be extracted');
+        assert.ok(punch!.direction[2] > 0.99,
+            `Interior-anchored hole should drill out the near shell (+Z); got ${JSON.stringify(punch!.direction)}`);
     });
 });

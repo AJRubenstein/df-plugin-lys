@@ -9,8 +9,65 @@ import type {
   ModelHollowingModifier,
   ModelHolePunchPlacement,
 } from '@/features/mesh-modifiers/types';
+import { MeshBVH } from 'three-mesh-bvh';
+import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { convertLysData } from './converter/convertLysData';
 import { LysData } from './converter/types';
+
+/**
+ * Resolve the inward drill direction for a tilted hole whose cylinder axis lies
+ * along `axis` (the tipRotation frame's Z). Lychee stores the axis line but no
+ * reliable inward sign, so we read it from the mesh: cast a ray each way from
+ * the tip.
+ *
+ * Supporters place most holes on the OUTER surface, but some drain/vent holes are
+ * anchored to the INTERIOR (cavity) wall and drill outward through the shell. The
+ * cavity mesh distinguishes the two:
+ *  - Anchored to the cavity wall (tip nearer the cavity mesh than the outer
+ *    surface): drill OUT through the near shell → toward the nearer outer hit.
+ *  - Anchored to the outer surface: a side that escapes to open air is OUTWARD,
+ *    so drill the other way; if both sides hit a wall the tip is embedded, so
+ *    drill toward the farther wall (more material).
+ *
+ * Returns null if the geometry gives no usable hit.
+ */
+function resolveDrillInward(
+  bvh: MeshBVH,
+  cavityBvh: MeshBVH | null,
+  tip: THREE.Vector3,
+  axis: THREE.Vector3,
+): THREE.Vector3 | null {
+  const firstHitDistance = (d: THREE.Vector3): number => {
+    const ray = new THREE.Ray(tip.clone().addScaledVector(d, 1e-3), d.clone());
+    let nearest = Infinity;
+    for (const hit of bvh.raycast(ray, THREE.DoubleSide)) {
+      if (hit.distance < nearest) nearest = hit.distance;
+    }
+    return nearest;
+  };
+  const forward = firstHitDistance(axis);
+  const backward = firstHitDistance(axis.clone().negate());
+
+  // Interior-anchored drain hole: tip sits nearer the cavity mesh than the outer
+  // surface. Drill toward the nearer outer-surface hit — the short way out through
+  // the shell. (closestPointToPoint returns squared distance; comparison only.)
+  if (cavityBvh) {
+    const dOuter = bvh.closestPointToPoint(tip)?.distance ?? Infinity;
+    const dCavity = cavityBvh.closestPointToPoint(tip)?.distance ?? Infinity;
+    if (dCavity < dOuter) {
+      return axis.clone().multiplyScalar(forward < backward ? 1 : -1);
+    }
+  }
+
+  const forwardEscapes = !Number.isFinite(forward);
+  const backwardEscapes = !Number.isFinite(backward);
+  if (forwardEscapes && backwardEscapes) return null;
+  let sign: number;
+  if (forwardEscapes) sign = -1;
+  else if (backwardEscapes) sign = 1;
+  else sign = forward > backward ? 1 : -1;
+  return axis.clone().multiplyScalar(sign);
+}
 
 /** Base64-encode a typed array for storage in meshModifiers. */
 function bytesToBase64(bytes: Uint8Array): string {
@@ -473,6 +530,24 @@ export class LysConverter {
 
       const placements: ModelHolePunchPlacement[] = [];
 
+      // A tilted hole's drill sign is resolved against the mesh geometry; build
+      // an acceleration structure once, only when a tilted hole is present.
+      const hasTiltedHole = Object.values(holes).some((h: any) => h && h.tipRotation);
+      const holeBvh = hasTiltedHole && geometry?.getAttribute('position')
+        ? new MeshBVH(geometry)
+        : null;
+      // The pre-baked cavity mesh lets us tell interior-anchored drain holes from
+      // outer-surface ones when resolving the drill sign.
+      let cavityBvh: MeshBVH | null = null;
+      if (hasTiltedHole && geometriesByName) {
+        for (const [stem, cavityGeom] of geometriesByName) {
+          if (stem.toLowerCase().endsWith('_hollowing') && cavityGeom.getAttribute('position')) {
+            cavityBvh = new MeshBVH(cavityGeom);
+            break;
+          }
+        }
+      }
+
       for (const [holeId, hole] of Object.entries(holes)) {
         if (!hole) {
           console.log(`[LysConverter][convertHollowing] Skipping hole ${holeId}: null/undefined entry`);
@@ -486,27 +561,30 @@ export class LysConverter {
           continue;
         }
 
-        // LYS holes store position at `tip` (surface contact point) and
-        // direction at `tipNormal`. The hole punch must drill INWARD (into the
-        // model). Lychee's `tipNormal` sign convention depends on whether the
-        // hole was reoriented: for un-rotated holes (`tipRotation == null`) it
-        // is the OUTWARD surface normal, so we negate it to drill inward; for
-        // holes the user tilted (`tipRotation` set) it already points INWARD
-        // (the drill axis), so we use it as-is. (Verified across
-        // Backhair_Whole.lys and Leg_L.lys — every mis-drilled hole was a
-        // `tipRotation`-set one.) Some variants use a 4x4 `stlMatrix` instead
-        // — fall back to that, then to defaults.
+        // LYS holes store their surface contact point at `tip`. The drill
+        // direction depends on whether the user tilted the hole:
+        //  - un-rotated (`tipRotation == null`): `tipNormal` is the OUTWARD
+        //    surface normal, so we negate it to drill inward.
+        //  - tilted (`tipRotation` set): the cylinder axis is the rotation
+        //    frame's Z (`tipNormal` is that frame's −Y and points sideways).
+        //    The frame doesn't encode which way along the axis is inward, so we
+        //    resolve the sign against the mesh (and cavity mesh for interior-
+        //    anchored drain holes — see resolveDrillInward). Verified across
+        //    5 files / 20 holes.
+        // Some variants use a 4x4 `stlMatrix` instead — fall back to that.
         let pos = new THREE.Vector3(0, 0, 0);
         let dir = new THREE.Vector3(0, 0, -1);
 
         if (hole.tip && typeof hole.tip.x === 'number') {
           pos.set(hole.tip.x, hole.tip.y, hole.tip.z);
-          if (hole.tipNormal && typeof hole.tipNormal.x === 'number') {
+          if (hole.tipRotation) {
+            const q = quaternionFromGlobalEulerDegrees(hole.tipRotation);
+            const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
+            const inward = holeBvh ? resolveDrillInward(holeBvh, cavityBvh, pos, axis) : null;
+            dir.copy(inward ?? axis);
+          } else if (hole.tipNormal && typeof hole.tipNormal.x === 'number') {
             const n = new THREE.Vector3(hole.tipNormal.x, hole.tipNormal.y, hole.tipNormal.z);
-            if (n.lengthSq() > 1e-8) {
-              n.normalize();
-              dir.copy(hole.tipRotation ? n : n.negate());
-            }
+            if (n.lengthSq() > 1e-8) dir.copy(n.normalize().negate());
           }
         } else {
           const stlMatrix: number[] | undefined = hole.stlMatrix;
