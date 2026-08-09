@@ -69,6 +69,13 @@ function resolveDrillInward(
   return axis.clone().multiplyScalar(sign);
 }
 
+/** Normalize an LYS objectId field (may be string or number) to a string, or null. */
+function normLysObjectId(val: unknown): string | null {
+  if (typeof val === 'string' && val.trim()) return val.trim();
+  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
+  return null;
+}
+
 /** Base64-encode a typed array for storage in meshModifiers. */
 function bytesToBase64(bytes: Uint8Array): string {
   if (typeof btoa === 'function') {
@@ -415,6 +422,13 @@ export class LysConverter {
    * @param geometry         Optional geometry used to compute bounding box for hole-position normalisation.
    * @param geometriesByName All parsed geometry blobs keyed by stem name. Used to
    *                         locate `_hollowing` cavity meshes.
+   * @param options          Per-object scoping for multi-part scenes:
+   *                         - `objectId`: keep only holes whose `objectId` matches. Omit
+   *                           to process the whole scene as one model (legacy behavior).
+   *                         - `cavityGeometry`: this object's own `_hollowing` cavity
+   *                           mesh, used only to resolve a tilted hole's drill sign. The
+   *                           caller resolves it (it already knows the object→geometry
+   *                           mapping), just like the outer `geometry` argument.
    * @returns ModelMeshModifiers or undefined if no hollowing/hole data is found.
    */
   static convertHollowing(
@@ -422,6 +436,7 @@ export class LysConverter {
     geometry?: THREE.BufferGeometry,
     geometriesByName?: Map<string, THREE.BufferGeometry>,
     isLegacyGeometry?: boolean,
+    options?: { objectId?: string; cavityGeometry?: THREE.BufferGeometry },
   ): ModelMeshModifiers | undefined {
     if (!sceneData) {
       console.log('[LysConverter][convertHollowing] No sceneData — skipping');
@@ -429,6 +444,12 @@ export class LysConverter {
     }
 
     const result: ModelMeshModifiers = {};
+
+    // Multi-part scenes call this once per object; scope the hole punches to that
+    // object so holes don't leak across models. Omitted for the whole-scene
+    // (single-model) path, which keeps the legacy behavior. (Hollowing/cavity
+    // extraction for Interior View is unchanged — see section 1.)
+    const targetObjectId = normLysObjectId(options?.objectId);
 
     // -----------------------------------------------------------------------
     // 1) Hollowing settings
@@ -519,10 +540,18 @@ export class LysConverter {
     // -----------------------------------------------------------------------
     // 2) Hole punches (drain holes)
     // -----------------------------------------------------------------------
-    const holes = sceneData?.holes?.present?.byId as Record<string, any> | undefined;
-    const holeCount = holes ? Object.keys(holes).length : 0;
-    console.log(`[LysConverter][convertHollowing] holes.present.byId has ${holeCount} entries`);
-    if (holes && holeCount > 0) {
+    const allHoles = sceneData?.holes?.present?.byId as Record<string, any> | undefined;
+    // In a multi-part scene every hole carries an `objectId`; keep only the ones
+    // belonging to the object we're converting. Without this, each imported model
+    // would receive every hole in the file. Unscoped, keep all holes.
+    const holeEntries = allHoles
+      ? Object.entries(allHoles).filter(([, hole]) => {
+          if (!targetObjectId) return true;
+          return normLysObjectId((hole as any)?.objectId) === targetObjectId;
+        })
+      : [];
+    console.log(`[LysConverter][convertHollowing] holes.present.byId has ${allHoles ? Object.keys(allHoles).length : 0} entries; ${holeEntries.length} match${targetObjectId ? ` object ${targetObjectId}` : ' (unscoped)'}`);
+    if (holeEntries.length > 0) {
       // Compute bounding box once for coordinate normalisation.
       geometry?.computeBoundingBox();
       const bbox = geometry?.boundingBox ?? null;
@@ -532,23 +561,30 @@ export class LysConverter {
 
       // A tilted hole's drill sign is resolved against the mesh geometry; build
       // an acceleration structure once, only when a tilted hole is present.
-      const hasTiltedHole = Object.values(holes).some((h: any) => h && h.tipRotation);
+      const hasTiltedHole = holeEntries.some(([, h]) => h && (h as any).tipRotation);
       const holeBvh = hasTiltedHole && geometry?.getAttribute('position')
         ? new MeshBVH(geometry)
         : null;
       // The pre-baked cavity mesh lets us tell interior-anchored drain holes from
-      // outer-surface ones when resolving the drill sign.
-      let cavityBvh: MeshBVH | null = null;
-      if (hasTiltedHole && geometriesByName) {
-        for (const [stem, cavityGeom] of geometriesByName) {
-          if (stem.toLowerCase().endsWith('_hollowing') && cavityGeom.getAttribute('position')) {
-            cavityBvh = new MeshBVH(cavityGeom);
+      // outer-surface ones when resolving the drill sign. Scoped: multi-part
+      // callers pass this object's own cavity; unscoped, use the first `_hollowing`
+      // mesh in the map (single-model file — there's only one).
+      let cavityGeom: THREE.BufferGeometry | null = null;
+      if (targetObjectId) {
+        cavityGeom = options?.cavityGeometry ?? null;
+      } else if (geometriesByName) {
+        for (const [stem, g] of geometriesByName) {
+          if (stem.toLowerCase().endsWith('_hollowing') && g.getAttribute('position')) {
+            cavityGeom = g;
             break;
           }
         }
       }
+      const cavityBvh = hasTiltedHole && cavityGeom?.getAttribute('position')
+        ? new MeshBVH(cavityGeom)
+        : null;
 
-      for (const [holeId, hole] of Object.entries(holes)) {
+      for (const [holeId, hole] of holeEntries) {
         if (!hole) {
           console.log(`[LysConverter][convertHollowing] Skipping hole ${holeId}: null/undefined entry`);
           continue;

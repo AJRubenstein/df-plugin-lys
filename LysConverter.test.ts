@@ -2043,4 +2043,49 @@ describe('LysConverter.convertHollowing', () => {
         assert.ok(punch!.direction[2] > 0.99,
             `Interior-anchored hole should drill out the near shell (+Z); got ${JSON.stringify(punch!.direction)}`);
     });
+
+    // Multi-part scenes: every hole carries an `objectId`. When convertHollowing
+    // is scoped to one object it must keep only that object's holes, otherwise
+    // each imported model receives every hole in the file.
+    function buildMultiObjectHoleScene(): any {
+        const hole = (id: string, objectId: string) => ({
+            id,
+            objectId,
+            tip: { x: 0, y: 0, z: 0 },
+            settings: { type: 'cylinder', diameter: 4, depth: 5 },
+        });
+        return {
+            holes: {
+                present: {
+                    byId: {
+                        h1: hole('h1', 'o1'),
+                        h2: hole('h2', 'o2'),
+                        h3: hole('h3', 'o1'),
+                        h4: hole('h4', 'o18'),
+                    },
+                },
+            },
+        };
+    }
+
+    it('keeps only the scoped object\'s holes in a multi-part scene', () => {
+        const scene = buildMultiObjectHoleScene();
+        const o1 = LysConverter.convertHollowing(scene, undefined, undefined, undefined, { objectId: 'o1' });
+        const o2 = LysConverter.convertHollowing(scene, undefined, undefined, undefined, { objectId: 'o2' });
+        const o18 = LysConverter.convertHollowing(scene, undefined, undefined, undefined, { objectId: 'o18' });
+
+        assert.deepStrictEqual(o1?.holePunches?.map((p) => p.id).sort(), ['h1', 'h3'],
+            'o1 should receive only its two holes');
+        assert.deepStrictEqual(o2?.holePunches?.map((p) => p.id), ['h2'],
+            'o2 should receive only its one hole');
+        assert.deepStrictEqual(o18?.holePunches?.map((p) => p.id), ['h4'],
+            'o18 should receive only its one hole');
+    });
+
+    it('keeps every hole when unscoped (whole-scene / single-model path)', () => {
+        const scene = buildMultiObjectHoleScene();
+        const all = LysConverter.convertHollowing(scene);
+        assert.strictEqual(all?.holePunches?.length, 4,
+            'Unscoped conversion should keep all holes regardless of objectId');
+    });
 });

@@ -369,6 +369,7 @@ function convertSingleObject(
   importCenterX: number,
   importCenterY: number,
   lysGeometriesByName: Map<string, THREE.BufferGeometry>,
+  cavityGeometry?: THREE.BufferGeometry,
 ): LysImportPayload {
   // Stage 1: prepare filtered object-local scene payload.
   const importedModelId = uuidv4();
@@ -474,7 +475,10 @@ function convertSingleObject(
     supportSummary: summarizeImportSupportData(dragonfruitData),
   });
 
-  const meshModifiers = LysConverter.convertHollowing(sceneDataForConvert, objGeometry, lysGeometriesByName);
+  const meshModifiers = LysConverter.convertHollowing(
+    sceneDataForConvert, objGeometry, lysGeometriesByName, undefined,
+    { objectId: objId, cavityGeometry },
+  );
   console.log('[lys-import][debug] convertSingleObject meshModifiers:', meshModifiers ? `hollowing=${!!meshModifiers.hollowing} holes=${meshModifiers.holePunches?.length ?? 0}` : 'undefined');
 
   return {
@@ -631,13 +635,19 @@ export async function importLysFile(
     const supportsByOwner = buildSupportsByOwner(supports, objectIds, fallbackId);
 
     const payloads: LysImportPayload[] = [];
-    for (const { id: objId, obj, geometry: objGeom } of objectsWithGeometry) {
+    for (const { id: objId, obj, geometry: objGeom, matchKey } of objectsWithGeometry) {
       const supportsForObj = supportsByOwner.get(objId) ?? {};
       console.log(`[lys-import] Object ${objId}: ${Object.keys(supportsForObj).length} supports`);
+      // This object's own cavity mesh (Lychee names it `<geometry-stem>_hollowing`).
+      // Passed through so tilted-hole drill signs resolve against the right cavity.
+      const cavityGeometry = matchKey
+        ? data.geometriesByName.get(`${matchKey}_hollowing`)
+          ?? data.geometriesByName.get(`${matchKey.toLowerCase()}_hollowing`)
+        : undefined;
       const payload = convertSingleObject(
         objId, obj, objGeom, supportsForObj,
         sceneDataForConvert, settings, 0, 0, // no center shift for multi-model
-        data.geometriesByName,
+        data.geometriesByName, cavityGeometry,
       );
       payloads.push(payload);
     }
