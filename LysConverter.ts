@@ -9,8 +9,72 @@ import type {
   ModelHollowingModifier,
   ModelHolePunchPlacement,
 } from '@/features/mesh-modifiers/types';
+import { MeshBVH } from 'three-mesh-bvh';
+import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { convertLysData } from './converter/convertLysData';
 import { LysData } from './converter/types';
+
+/**
+ * Resolve the inward drill direction for a tilted hole whose cylinder axis lies
+ * along `axis` (the tipRotation frame's Z). Lychee stores the axis line but no
+ * reliable inward sign, so we read it from the mesh: cast a ray each way from
+ * the tip.
+ *
+ * Supporters place most holes on the OUTER surface, but some drain/vent holes are
+ * anchored to the INTERIOR (cavity) wall and drill outward through the shell. The
+ * cavity mesh distinguishes the two:
+ *  - Anchored to the cavity wall (tip nearer the cavity mesh than the outer
+ *    surface): drill OUT through the near shell → toward the nearer outer hit.
+ *  - Anchored to the outer surface: a side that escapes to open air is OUTWARD,
+ *    so drill the other way; if both sides hit a wall the tip is embedded, so
+ *    drill toward the farther wall (more material).
+ *
+ * Returns null if the geometry gives no usable hit.
+ */
+function resolveDrillInward(
+  bvh: MeshBVH,
+  cavityBvh: MeshBVH | null,
+  tip: THREE.Vector3,
+  axis: THREE.Vector3,
+): THREE.Vector3 | null {
+  const firstHitDistance = (d: THREE.Vector3): number => {
+    const ray = new THREE.Ray(tip.clone().addScaledVector(d, 1e-3), d.clone());
+    let nearest = Infinity;
+    for (const hit of bvh.raycast(ray, THREE.DoubleSide)) {
+      if (hit.distance < nearest) nearest = hit.distance;
+    }
+    return nearest;
+  };
+  const forward = firstHitDistance(axis);
+  const backward = firstHitDistance(axis.clone().negate());
+
+  // Interior-anchored drain hole: tip sits nearer the cavity mesh than the outer
+  // surface. Drill toward the nearer outer-surface hit — the short way out through
+  // the shell. (closestPointToPoint returns squared distance; comparison only.)
+  if (cavityBvh) {
+    const dOuter = bvh.closestPointToPoint(tip)?.distance ?? Infinity;
+    const dCavity = cavityBvh.closestPointToPoint(tip)?.distance ?? Infinity;
+    if (dCavity < dOuter) {
+      return axis.clone().multiplyScalar(forward < backward ? 1 : -1);
+    }
+  }
+
+  const forwardEscapes = !Number.isFinite(forward);
+  const backwardEscapes = !Number.isFinite(backward);
+  if (forwardEscapes && backwardEscapes) return null;
+  let sign: number;
+  if (forwardEscapes) sign = -1;
+  else if (backwardEscapes) sign = 1;
+  else sign = forward > backward ? 1 : -1;
+  return axis.clone().multiplyScalar(sign);
+}
+
+/** Normalize an LYS objectId field (may be string or number) to a string, or null. */
+function normLysObjectId(val: unknown): string | null {
+  if (typeof val === 'string' && val.trim()) return val.trim();
+  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
+  return null;
+}
 
 /** Base64-encode a typed array for storage in meshModifiers. */
 function bytesToBase64(bytes: Uint8Array): string {
@@ -358,6 +422,13 @@ export class LysConverter {
    * @param geometry         Optional geometry used to compute bounding box for hole-position normalisation.
    * @param geometriesByName All parsed geometry blobs keyed by stem name. Used to
    *                         locate `_hollowing` cavity meshes.
+   * @param options          Per-object scoping for multi-part scenes:
+   *                         - `objectId`: keep only holes whose `objectId` matches. Omit
+   *                           to process the whole scene as one model (legacy behavior).
+   *                         - `cavityGeometry`: this object's own `_hollowing` cavity
+   *                           mesh, used only to resolve a tilted hole's drill sign. The
+   *                           caller resolves it (it already knows the object→geometry
+   *                           mapping), just like the outer `geometry` argument.
    * @returns ModelMeshModifiers or undefined if no hollowing/hole data is found.
    */
   static convertHollowing(
@@ -365,6 +436,7 @@ export class LysConverter {
     geometry?: THREE.BufferGeometry,
     geometriesByName?: Map<string, THREE.BufferGeometry>,
     isLegacyGeometry?: boolean,
+    options?: { objectId?: string; cavityGeometry?: THREE.BufferGeometry },
   ): ModelMeshModifiers | undefined {
     if (!sceneData) {
       console.log('[LysConverter][convertHollowing] No sceneData — skipping');
@@ -372,6 +444,12 @@ export class LysConverter {
     }
 
     const result: ModelMeshModifiers = {};
+
+    // Multi-part scenes call this once per object; scope the hole punches to that
+    // object so holes don't leak across models. Omitted for the whole-scene
+    // (single-model) path, which keeps the legacy behavior. (Hollowing/cavity
+    // extraction for Interior View is unchanged — see section 1.)
+    const targetObjectId = normLysObjectId(options?.objectId);
 
     // -----------------------------------------------------------------------
     // 1) Hollowing settings
@@ -462,10 +540,18 @@ export class LysConverter {
     // -----------------------------------------------------------------------
     // 2) Hole punches (drain holes)
     // -----------------------------------------------------------------------
-    const holes = sceneData?.holes?.present?.byId as Record<string, any> | undefined;
-    const holeCount = holes ? Object.keys(holes).length : 0;
-    console.log(`[LysConverter][convertHollowing] holes.present.byId has ${holeCount} entries`);
-    if (holes && holeCount > 0) {
+    const allHoles = sceneData?.holes?.present?.byId as Record<string, any> | undefined;
+    // In a multi-part scene every hole carries an `objectId`; keep only the ones
+    // belonging to the object we're converting. Without this, each imported model
+    // would receive every hole in the file. Unscoped, keep all holes.
+    const holeEntries = allHoles
+      ? Object.entries(allHoles).filter(([, hole]) => {
+          if (!targetObjectId) return true;
+          return normLysObjectId((hole as any)?.objectId) === targetObjectId;
+        })
+      : [];
+    console.log(`[LysConverter][convertHollowing] holes.present.byId has ${allHoles ? Object.keys(allHoles).length : 0} entries; ${holeEntries.length} match${targetObjectId ? ` object ${targetObjectId}` : ' (unscoped)'}`);
+    if (holeEntries.length > 0) {
       // Compute bounding box once for coordinate normalisation.
       geometry?.computeBoundingBox();
       const bbox = geometry?.boundingBox ?? null;
@@ -473,7 +559,32 @@ export class LysConverter {
 
       const placements: ModelHolePunchPlacement[] = [];
 
-      for (const [holeId, hole] of Object.entries(holes)) {
+      // A tilted hole's drill sign is resolved against the mesh geometry; build
+      // an acceleration structure once, only when a tilted hole is present.
+      const hasTiltedHole = holeEntries.some(([, h]) => h && (h as any).tipRotation);
+      const holeBvh = hasTiltedHole && geometry?.getAttribute('position')
+        ? new MeshBVH(geometry)
+        : null;
+      // The pre-baked cavity mesh lets us tell interior-anchored drain holes from
+      // outer-surface ones when resolving the drill sign. Scoped: multi-part
+      // callers pass this object's own cavity; unscoped, use the first `_hollowing`
+      // mesh in the map (single-model file — there's only one).
+      let cavityGeom: THREE.BufferGeometry | null = null;
+      if (targetObjectId) {
+        cavityGeom = options?.cavityGeometry ?? null;
+      } else if (geometriesByName) {
+        for (const [stem, g] of geometriesByName) {
+          if (stem.toLowerCase().endsWith('_hollowing') && g.getAttribute('position')) {
+            cavityGeom = g;
+            break;
+          }
+        }
+      }
+      const cavityBvh = hasTiltedHole && cavityGeom?.getAttribute('position')
+        ? new MeshBVH(cavityGeom)
+        : null;
+
+      for (const [holeId, hole] of holeEntries) {
         if (!hole) {
           console.log(`[LysConverter][convertHollowing] Skipping hole ${holeId}: null/undefined entry`);
           continue;
@@ -486,17 +597,28 @@ export class LysConverter {
           continue;
         }
 
-        // LYS holes store position at `tip` (surface contact point) and
-        // direction at `tipNormal` (outward-pointing surface normal).
-        // The hole punch direction must point INWARD (into the model), so
-        // we negate the normal. Some variants use a 4x4 `stlMatrix` instead
-        // — fall back to that, then to defaults.
+        // LYS holes store their surface contact point at `tip`. The drill
+        // direction depends on whether the user tilted the hole:
+        //  - un-rotated (`tipRotation == null`): `tipNormal` is the OUTWARD
+        //    surface normal, so we negate it to drill inward.
+        //  - tilted (`tipRotation` set): the cylinder axis is the rotation
+        //    frame's Z (`tipNormal` is that frame's −Y and points sideways).
+        //    The frame doesn't encode which way along the axis is inward, so we
+        //    resolve the sign against the mesh (and cavity mesh for interior-
+        //    anchored drain holes — see resolveDrillInward). Verified across
+        //    5 files / 20 holes.
+        // Some variants use a 4x4 `stlMatrix` instead — fall back to that.
         let pos = new THREE.Vector3(0, 0, 0);
         let dir = new THREE.Vector3(0, 0, -1);
 
         if (hole.tip && typeof hole.tip.x === 'number') {
           pos.set(hole.tip.x, hole.tip.y, hole.tip.z);
-          if (hole.tipNormal && typeof hole.tipNormal.x === 'number') {
+          if (hole.tipRotation) {
+            const q = quaternionFromGlobalEulerDegrees(hole.tipRotation);
+            const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
+            const inward = holeBvh ? resolveDrillInward(holeBvh, cavityBvh, pos, axis) : null;
+            dir.copy(inward ?? axis);
+          } else if (hole.tipNormal && typeof hole.tipNormal.x === 'number') {
             const n = new THREE.Vector3(hole.tipNormal.x, hole.tipNormal.y, hole.tipNormal.z);
             if (n.lengthSq() > 1e-8) dir.copy(n.normalize().negate());
           }

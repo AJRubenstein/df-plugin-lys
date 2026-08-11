@@ -1978,4 +1978,114 @@ describe('LysConverter.convertHollowing', () => {
         assert.strictEqual(result!.hollowing!.enabled, true,
             'Hollowing modifier should be enabled when sceneData sets enabled=true');
     });
+
+    function buildHoleScene(hole: Record<string, unknown>): any {
+        return {
+            holes: {
+                present: {
+                    byId: {
+                        h1: { id: 'h1', tip: { x: 0, y: 0, z: 0 }, settings: { type: 'cylinder', diameter: 4, depth: 5 }, ...hole },
+                    },
+                },
+            },
+        };
+    }
+
+    it('negates tipNormal for un-rotated holes (tipRotation null → outward normal)', () => {
+        // tipNormal points +X (outward); punch must drill -X (inward).
+        const result = LysConverter.convertHollowing(
+            buildHoleScene({ tipNormal: { x: 1, y: 0, z: 0 }, tipRotation: null }),
+        );
+        const punch = result?.holePunches?.[0];
+        assert.ok(punch, 'Expected a hole punch to be extracted');
+        assert.ok(punch!.direction[0] < -0.99,
+            `Un-rotated hole should drill along -tipNormal; got ${JSON.stringify(punch!.direction)}`);
+    });
+
+    it('resolves tilted-hole drill sign from geometry (frame-Z into the solid)', () => {
+        // Thin slab spanning z ∈ [-1, 1]; tip on the top face. tipRotation is
+        // identity, so the frame's Z axis is +Z — pointing OUT of the top. The
+        // geometry sign-resolver must flip it to -Z to drill into the slab.
+        const slab = new THREE.BoxGeometry(20, 20, 2); // centered: z ∈ [-1, 1]
+        const result = LysConverter.convertHollowing(
+            buildHoleScene({
+                tip: { x: 0, y: 0, z: 1 },
+                tipNormal: { x: 0, y: 0, z: 1 },
+                tipRotation: { x: 0, y: 0, z: 0 },
+            }),
+            slab,
+        );
+        const punch = result?.holePunches?.[0];
+        assert.ok(punch, 'Expected a hole punch to be extracted');
+        assert.ok(punch!.direction[2] < -0.99,
+            `Tilted hole should drill into the slab (-Z); got ${JSON.stringify(punch!.direction)}`);
+    });
+
+    it('drills an interior-anchored hole OUT through the near shell', () => {
+        // Thick block z ∈ [-5, 5] hollowed by a cavity void z ∈ [-3, 3], leaving a
+        // 2mm top shell (z ∈ [3, 5]). A drain hole anchored to the interior wall
+        // (tip just inside the void at z=2.9) with identity rotation has frame-Z
+        // = +Z. Because it is nearer the cavity than the outer surface, it must
+        // drill OUT through the near top shell (+Z), not into the far bulk (-Z).
+        const outer = new THREE.BoxGeometry(20, 20, 10); // z ∈ [-5, 5]
+        const cavity = new THREE.BoxGeometry(16, 16, 6); // z ∈ [-3, 3] (the void)
+        const result = LysConverter.convertHollowing(
+            buildHoleScene({
+                tip: { x: 0, y: 0, z: 2.9 },
+                tipNormal: { x: 0, y: 0, z: 1 },
+                tipRotation: { x: 0, y: 0, z: 0 },
+            }),
+            outer,
+            new Map([['abc_hollowing', cavity]]),
+        );
+        const punch = result?.holePunches?.[0];
+        assert.ok(punch, 'Expected a hole punch to be extracted');
+        assert.ok(punch!.direction[2] > 0.99,
+            `Interior-anchored hole should drill out the near shell (+Z); got ${JSON.stringify(punch!.direction)}`);
+    });
+
+    // Multi-part scenes: every hole carries an `objectId`. When convertHollowing
+    // is scoped to one object it must keep only that object's holes, otherwise
+    // each imported model receives every hole in the file.
+    function buildMultiObjectHoleScene(): any {
+        const hole = (id: string, objectId: string) => ({
+            id,
+            objectId,
+            tip: { x: 0, y: 0, z: 0 },
+            settings: { type: 'cylinder', diameter: 4, depth: 5 },
+        });
+        return {
+            holes: {
+                present: {
+                    byId: {
+                        h1: hole('h1', 'o1'),
+                        h2: hole('h2', 'o2'),
+                        h3: hole('h3', 'o1'),
+                        h4: hole('h4', 'o18'),
+                    },
+                },
+            },
+        };
+    }
+
+    it('keeps only the scoped object\'s holes in a multi-part scene', () => {
+        const scene = buildMultiObjectHoleScene();
+        const o1 = LysConverter.convertHollowing(scene, undefined, undefined, undefined, { objectId: 'o1' });
+        const o2 = LysConverter.convertHollowing(scene, undefined, undefined, undefined, { objectId: 'o2' });
+        const o18 = LysConverter.convertHollowing(scene, undefined, undefined, undefined, { objectId: 'o18' });
+
+        assert.deepStrictEqual(o1?.holePunches?.map((p) => p.id).sort(), ['h1', 'h3'],
+            'o1 should receive only its two holes');
+        assert.deepStrictEqual(o2?.holePunches?.map((p) => p.id), ['h2'],
+            'o2 should receive only its one hole');
+        assert.deepStrictEqual(o18?.holePunches?.map((p) => p.id), ['h4'],
+            'o18 should receive only its one hole');
+    });
+
+    it('keeps every hole when unscoped (whole-scene / single-model path)', () => {
+        const scene = buildMultiObjectHoleScene();
+        const all = LysConverter.convertHollowing(scene);
+        assert.strictEqual(all?.holePunches?.length, 4,
+            'Unscoped conversion should keep all holes regardless of objectId');
+    });
 });
