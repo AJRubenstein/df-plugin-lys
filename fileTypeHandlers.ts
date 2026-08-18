@@ -40,6 +40,13 @@ function bytesToBase64(bytes: Uint8Array): string {
  * Structured result from a successful LYS file import.
  * The host scene manager consumes this payload to create scene objects and
  * load support geometry.
+ *
+ * Structurally a `PluginSceneImportModel` (see the host's pluginFileTypeBridge):
+ * `modelId` is the contract binding this model to its supports. The host uses it
+ * as the model id AND stamps it onto every support in `supportData`, so the two
+ * must describe the same model. On the multi-object path each payload carries
+ * only the supports `buildSupportsByOwner` assigned to that object, resolved
+ * from the LYS file's own `objectIdTip`/`objectIdBase`.
  */
 export type LysImportPayload = {
   modelId: string;
@@ -915,6 +922,10 @@ export async function importLysFile(
 
   return {
     modelId: importedModelId,
+    // Single-model path needs objName too: a one-object .lys still carries the
+    // object's own name, and without this the host falls back to the project
+    // filename. The multi-object path gets it via convertSingleObject.
+    objName: deriveModelName(convertObjects?.[targetObjId]?.name),
     geometry: singleGeom,
     transform,
     supportData: dragonfruitData,
