@@ -682,6 +682,7 @@ export async function importLysFile(
     console.log('[lys-import][debug] multi-model payloads generated', {
       payloadCount: payloads.length,
       modelIds: payloads.map((p) => p.modelId),
+      objNames: payloads.map((p) => p.objName ?? '(none)'),
       supportSummaries: payloads.map((p) => ({ modelId: p.modelId, ...summarizeImportSupportData(p.supportData) })),
     });
 
