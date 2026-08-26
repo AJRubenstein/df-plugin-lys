@@ -1728,6 +1728,56 @@ describe('LysConverter', () => {
         assert.strictEqual(root.transform.pos.z, 0, 'Root base should remain floor anchored at z=0');
     });
 
+    it('should import a mini support as a twig regardless of its LYS type', () => {
+        // Lychee marks "Mini Support" across every type value. Screening on
+        // type === 1 first sent type-0 minis to the root/trunk path, which built
+        // a grounded shaft into the model instead of a mesh-to-mesh span.
+        const MINI_TYPE0 = {
+            objects: {
+                present: {
+                    byId: {
+                        o50: {
+                            id: 'o50',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        sMini: {
+                            id: 'sMini',
+                            type: 0,
+                            mini: true,
+                            isBaseTip: true,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o50', objectIdBase: 'o50',
+                            base: { x: 0, y: 0, z: -16 },
+                            tip: { x: 3, y: 0, z: -14 },
+                            baseNormal: { x: 0, y: -1, z: 0 },
+                            tipNormal: { x: 0, y: 1, z: 0 },
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                baseTip: { pointDiameter: 0.5, diameter: 1.3, length: 3, isStraight: true },
+                                tip: { pointDiameter: 0.6, diameter: 1.3, length: 3 },
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(MINI_TYPE0 as any, createDefaultSettings());
+
+        assert.strictEqual(result.twigs?.length ?? 0, 1, 'A type-0 mini must import as a twig');
+        assert.strictEqual(result.trunks.length, 0, 'A mini must not become a grounded trunk');
+        assert.strictEqual(result.roots.length, 0, 'A mini must not create a root');
+    });
+
     it('should share one knot between braces converging on the same point', () => {
         // LYS authors a hub as a single junction. Minting a knot per brace
         // endpoint stacked identical knots on one shaft, so dragging one moved

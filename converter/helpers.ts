@@ -153,9 +153,6 @@ export function isTwigCandidate(
   // Twig candidates are floating two-normal supports below the configured length threshold.
   if (parentIds.length !== 0) return false;
 
-  const supportType = (s as any)?.type;
-  if (Number.isFinite(supportType) && supportType !== 1) return false;
-
   if (!hasValidNormal(s.baseNormal) || !hasValidNormal(s.tipNormal)) {
     return false;
   }
@@ -185,6 +182,10 @@ export function isTwigCandidate(
   if (isMiniSupport(s)) {
     return true;
   }
+
+  // LYS marks a mini across every `type` value, so this only screens non-minis.
+  const supportType = (s as any)?.type;
+  if (Number.isFinite(supportType) && supportType !== 1) return false;
 
   const baseZ = s.base?.z;
   if (!Number.isFinite(baseZ) || Math.abs(baseZ) <= 0.2) {
