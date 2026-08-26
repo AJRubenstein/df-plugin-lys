@@ -1728,6 +1728,92 @@ describe('LysConverter', () => {
         assert.strictEqual(root.transform.pos.z, 0, 'Root base should remain floor anchored at z=0');
     });
 
+    it('should share one knot between braces converging on the same point', () => {
+        // LYS authors a hub as a single junction. Minting a knot per brace
+        // endpoint stacked identical knots on one shaft, so dragging one moved
+        // only its own brace.
+        const HUB_DATA = {
+            objects: {
+                present: {
+                    byId: {
+                        o40: {
+                            id: 'o40',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        sHub: {
+                            id: 'sHub', type: 0, parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 0, y: 0, z: 0 }, tip: { x: 0, y: 0, z: 30 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        sA: {
+                            id: 'sA', type: 0, parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 14, y: 0, z: 0 }, tip: { x: 14, y: 0, z: 30 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        sB: {
+                            id: 'sB', type: 0, parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: -14, y: 0, z: 0 }, tip: { x: -14, y: 0, z: 30 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        // Two braces meeting the hub at the same height.
+                        sBrace1: {
+                            id: 'sBrace1', type: 0, parentId: [],
+                            parentBaseId: 'sHub', parentTipId: 'sA',
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 0, y: 0, z: 15 }, tip: { x: 14, y: 0, z: 15 },
+                            settings: { base: { joinDiameter: 0.8 }, tip: { diameter: 0.5, length: 2 } }
+                        },
+                        sBrace2: {
+                            id: 'sBrace2', type: 0, parentId: [],
+                            parentBaseId: 'sHub', parentTipId: 'sB',
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 0, y: 0, z: 15 }, tip: { x: -14, y: 0, z: 15 },
+                            settings: { base: { joinDiameter: 0.8 }, tip: { diameter: 0.5, length: 2 } }
+                        },
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(HUB_DATA as any, createDefaultSettings());
+
+        assert.strictEqual(result.braces.length, 2, 'Both braces should import');
+
+        const knotById = new Map(result.knots.map(k => [k.id, k]));
+        const [b1, b2] = result.braces;
+        const hubKnots = [b1.startKnotId, b1.endKnotId, b2.startKnotId, b2.endKnotId]
+            .map(id => knotById.get(id)!)
+            .filter(k => k !== undefined);
+        assert.strictEqual(hubKnots.length, 4, 'Every brace endpoint must resolve to a knot');
+
+        // The two hub-side endpoints land on the same shaft/position, so they
+        // must be one knot rather than two stacked ones.
+        const b2Ends = new Set([b2.startKnotId, b2.endKnotId]);
+        const shared = [b1.startKnotId, b1.endKnotId].filter(id => b2Ends.has(id));
+        assert.strictEqual(shared.length, 1, 'Braces meeting at one point should share exactly one knot');
+
+        // No knot may be stacked on another at the same shaft+position+diameter.
+        const siteKey = (k: typeof result.knots[number]) =>
+            `${k.parentShaftId}|${k.pos.x.toFixed(3)},${k.pos.y.toFixed(3)},${k.pos.z.toFixed(3)}|${k.diameter}`;
+        const sites = new Set(result.knots.map(siteKey));
+        assert.strictEqual(sites.size, result.knots.length, 'No two knots may occupy the same attachment site');
+
+        assert.ok(b1.startKnotId !== b1.endKnotId, 'A brace must not collapse to a single knot');
+        assert.ok(b2.startKnotId !== b2.endKnotId, 'A brace must not collapse to a single knot');
+    });
+
     it('should attach braces whose parent is a stick', () => {
         // Sticks host children exactly as twigs do; before they were registered
         // as hosts, a brace naming one was dropped with an "unprocessed parent" warning.

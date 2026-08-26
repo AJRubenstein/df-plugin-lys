@@ -1221,6 +1221,37 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       });
     }
 
+    // Brace endpoints landing on the same shaft, position and diameter are one
+    // attachment point, so they share a knot. Position is quantised to 1e-3 mm
+    // (well under the finest authored geometry) to absorb float noise; diameter
+    // is part of the key because a tapered host gives different endpoints
+    // different diameters at the same t.
+    const braceKnotByKey = new Map<string, Knot>();
+    const reuseOrCreateBraceKnot = (
+      parentShaftId: string,
+      t: number,
+      pos: Vec3,
+      diameter: number,
+    ): Knot => {
+      const r = (v: number) => Math.round(v * 1000) / 1000;
+      const key = `${parentShaftId}|${r(pos.x)},${r(pos.y)},${r(pos.z)}|${r(diameter)}`;
+
+      const existing = braceKnotByKey.get(key);
+      if (existing) return existing;
+
+      const knot: Knot = {
+        id: uuidv4(),
+        parentShaftId,
+        t,
+        pos,
+        diameter,
+        _importHint: 'braceImported',
+      };
+      braceKnotByKey.set(key, knot);
+      result.knots.push(knot);
+      return knot;
+    };
+
     // -----------------------------------------------------------------------
     // Phase 4F: convert braces using two-parent host pairing.
     // -----------------------------------------------------------------------
@@ -1326,25 +1357,22 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         return braceJointDiameter;
       };
 
-      const knotA: Knot = {
-        id: uuidv4(),
-        parentShaftId: pairing.projA.parentShaftId,
-        t: pairing.projA.t,
-        pos: knotPosA,
-        diameter: braceKnotDiameterForHost(hostA, pairing.projA),
-        _importHint: 'braceImported',
-      };
+      // Braces converging on one point share that knot. LYS authors a hub as a
+      // single junction; minting a knot per endpoint stacked up to 8 identical
+      // knots on one shaft, so dragging one moved only its own brace.
+      const knotA = reuseOrCreateBraceKnot(
+        pairing.projA.parentShaftId,
+        pairing.projA.t,
+        knotPosA,
+        braceKnotDiameterForHost(hostA, pairing.projA),
+      );
 
-      const knotB: Knot = {
-        id: uuidv4(),
-        parentShaftId: pairing.projB.parentShaftId,
-        t: pairing.projB.t,
-        pos: knotPosB,
-        diameter: braceKnotDiameterForHost(hostB, pairing.projB),
-        _importHint: 'braceImported',
-      };
-
-      result.knots.push(knotA, knotB);
+      const knotB = reuseOrCreateBraceKnot(
+        pairing.projB.parentShaftId,
+        pairing.projB.t,
+        knotPosB,
+        braceKnotDiameterForHost(hostB, pairing.projB),
+      );
 
       const brace: Brace = {
         id: uuidv4(),
