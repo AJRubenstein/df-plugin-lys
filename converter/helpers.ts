@@ -528,6 +528,25 @@ function projectPointToTwigHost(
   return { ...projected, segmentId: seg.id };
 }
 
+function projectPointToStickHost(
+  host: Extract<HostEntry, { kind: 'stick' }>,
+  point: THREE.Vector3,
+): { t: number; pointOnLine: Vec3; segmentId: string } | null {
+  // Same single-segment shape as a twig; joints carry the contact standoff, so
+  // project onto the joint line rather than the cone centres.
+  const seg = host.stick.segments[0];
+  if (!seg) return null;
+
+  const startVec = seg.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+  const endVec = seg.topJoint?.pos ?? host.stick.contactConeB.pos;
+
+  const start = new THREE.Vector3(startVec.x, startVec.y, startVec.z);
+  const end = new THREE.Vector3(endVec.x, endVec.y, endVec.z);
+
+  const projected = projectPointToSegment(seg, start, end, point);
+  return { ...projected, segmentId: seg.id };
+}
+
 export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: number; pointOnLine: Vec3; parentShaftId: string } | null {
   if (host.kind === 'trunk') {
     const projection = findClosestSegment(host.trunk, host.root, { x: point.x, y: point.y, z: point.z });
@@ -552,6 +571,16 @@ export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: 
 
   if (host.kind === 'twig') {
     const projection = projectPointToTwigHost(host, point);
+    if (!projection) return null;
+    return {
+      t: projection.t,
+      pointOnLine: projection.pointOnLine,
+      parentShaftId: projection.segmentId,
+    };
+  }
+
+  if (host.kind === 'stick') {
+    const projection = projectPointToStickHost(host, point);
     if (!projection) return null;
     return {
       t: projection.t,
@@ -610,6 +639,16 @@ function getHostBaseAndTipPoints(host: HostEntry): { base: THREE.Vector3; tip: T
         host.twig.contactDiskB.pos.y,
         host.twig.contactDiskB.pos.z,
       ),
+    };
+  }
+
+  if (host.kind === 'stick') {
+    const seg = host.stick.segments[0];
+    const baseVec = seg?.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+    const tipVec = seg?.topJoint?.pos ?? host.stick.contactConeB.pos;
+    return {
+      base: new THREE.Vector3(baseVec.x, baseVec.y, baseVec.z),
+      tip: new THREE.Vector3(tipVec.x, tipVec.y, tipVec.z),
     };
   }
 
@@ -735,6 +774,31 @@ function collectHostSegmentProjectionCandidates(
       t: projected.t,
       distance,
       isEndpoint,
+      segmentIndex: 0,
+      segmentCount: 1,
+    });
+
+    return candidates;
+  }
+
+  if (host.kind === 'stick') {
+    const seg = host.stick.segments[0];
+    if (!seg) return candidates;
+
+    const startVec = seg.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+    const endVec = seg.topJoint?.pos ?? host.stick.contactConeB.pos;
+    const start: Vec3 = { x: startVec.x, y: startVec.y, z: startVec.z };
+    const end: Vec3 = { x: endVec.x, y: endVec.y, z: endVec.z };
+
+    const projected = projectPointToSegment(seg, start, end, point);
+    const projectedPoint = new THREE.Vector3(projected.pointOnLine.x, projected.pointOnLine.y, projected.pointOnLine.z);
+
+    candidates.push({
+      parentShaftId: seg.id,
+      pointOnLine: projected.pointOnLine,
+      t: projected.t,
+      distance: point.distanceTo(projectedPoint),
+      isEndpoint: projected.t <= 0.02 || projected.t >= 0.98,
       segmentIndex: 0,
       segmentCount: 1,
     });
@@ -978,6 +1042,20 @@ function projectPointToHostPreferredSide(
       y: host.twig.contactDiskB.pos.y,
       z: host.twig.contactDiskB.pos.z,
     };
+
+    const projected = projectPointToSegment(segment, start, end, point);
+    return { ...projected, parentShaftId: segment.id };
+  }
+
+  if (host.kind === 'stick') {
+    // Single segment, so preferred side is degenerate — same as the twig case.
+    const segment = host.stick.segments[0];
+    if (!segment) return null;
+
+    const startVec = segment.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+    const endVec = segment.topJoint?.pos ?? host.stick.contactConeB.pos;
+    const start: Vec3 = { x: startVec.x, y: startVec.y, z: startVec.z };
+    const end: Vec3 = { x: endVec.x, y: endVec.y, z: endVec.z };
 
     const projected = projectPointToSegment(segment, start, end, point);
     return { ...projected, parentShaftId: segment.id };

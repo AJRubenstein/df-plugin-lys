@@ -1728,6 +1728,94 @@ describe('LysConverter', () => {
         assert.strictEqual(root.transform.pos.z, 0, 'Root base should remain floor anchored at z=0');
     });
 
+    it('should attach braces whose parent is a stick', () => {
+        // Sticks host children exactly as twigs do; before they were registered
+        // as hosts, a brace naming one was dropped with an "unprocessed parent" warning.
+        const STICK_PARENT_BRACE_DATA = {
+            objects: {
+                present: {
+                    byId: {
+                        o30: {
+                            id: 'o30',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        // Stick: floating, two normals, parentless.
+                        sStick: {
+                            id: 'sStick', type: 1, mini: false, isBaseTip: true,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o30', objectIdBase: 'o30',
+                            base: { x: 0, y: 0, z: 10 },
+                            tip: { x: 0, y: 0, z: 25 },
+                            baseNormal: { x: 0, y: -1, z: 0 },
+                            tipNormal: { x: 0, y: 1, z: 0 },
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                baseTip: { pointDiameter: 0.42, diameter: 1.4, length: 2.5, isStraight: true },
+                                tip: { pointDiameter: 0.28, diameter: 1.0, length: 2.5 },
+                            }
+                        },
+                        // Trunk: grounded, gives the brace a second host.
+                        sTrunk: {
+                            id: 'sTrunk', type: 0, parentId: [],
+                            parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o30', objectIdBase: 'o30',
+                            base: { x: 12, y: 0, z: 0 },
+                            tip: { x: 12, y: 0, z: 22 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        // Brace spanning stick -> trunk.
+                        sBrace: {
+                            id: 'sBrace', type: 0, parentId: [],
+                            parentBaseId: 'sStick', parentTipId: 'sTrunk',
+                            objectIdTip: 'o30', objectIdBase: 'o30',
+                            base: { x: 0, y: 0, z: 18 },
+                            tip: { x: 12, y: 0, z: 16 },
+                            settings: { base: { joinDiameter: 0.8 }, tip: { diameter: 0.5, length: 2 } }
+                        },
+                    }
+                }
+            }
+        };
+
+        const warnings: string[] = [];
+        const originalWarn = console.warn;
+        console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+        let result;
+        try {
+            result = LysConverter.convert(STICK_PARENT_BRACE_DATA as any, createDefaultSettings());
+        } finally {
+            console.warn = originalWarn;
+        }
+
+        assert.strictEqual(result.sticks?.length ?? 0, 1, 'Expected the stick to import');
+        assert.strictEqual(result.braces.length, 1, 'Brace with a stick parent should import');
+        assert.strictEqual(
+            warnings.filter(w => w.includes('unknown/unprocessed parent')).length, 0,
+            'Stick parents must resolve, not warn as unprocessed',
+        );
+
+        const stickSegmentIds = new Set(result.sticks![0].segments.map(seg => seg.id));
+        const knotById = new Map(result.knots.map(k => [k.id, k]));
+        const brace = result.braces[0];
+        const hostedOnStick = [brace.startKnotId, brace.endKnotId]
+            .map(id => knotById.get(id))
+            .filter(k => k && stickSegmentIds.has(k.parentShaftId));
+
+        assert.strictEqual(hostedOnStick.length, 1, 'Exactly one brace end should host on the stick');
+        const knot = hostedOnStick[0]!;
+        assert.ok(knot.t !== undefined && knot.t >= 0 && knot.t <= 1, 'Stick-hosted knot t must be in range');
+        assert.ok(knot.diameter !== undefined && knot.diameter > 0, 'Stick-hosted knot needs a real diameter');
+    });
+
     it('should import floating dual-normal parentless supports as sticks with no root/knot entities', () => {
         const STICK_ONLY_DATA = {
             objects: {

@@ -628,7 +628,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     // -----------------------------------------------------------------------
     // Phase 4B: convert floating two-cone sticks.
     // -----------------------------------------------------------------------
-    for (const { s } of stickCandidates) {
+    for (const { id, s } of stickCandidates) {
       if (!s.base || !s.tip) continue;
 
       const baseWorld = transformObjectPoint(s.base);
@@ -693,6 +693,14 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       };
 
       result.sticks?.push(stick);
+
+      // Register as a host so braces/leaves attached to this stick can resolve
+      // against it in later phases, the same way twigs do.
+      hostsByLysId.set(id, {
+        kind: 'stick',
+        shaftId: stick.id,
+        stick,
+      });
     }
 
     // -----------------------------------------------------------------------
@@ -1112,10 +1120,10 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         continue;
       }
 
-      if (parentHost.kind === 'twig') {
+      if (parentHost.kind === 'twig' || parentHost.kind === 'stick') {
         // Kickstands are grounded columns that attach to trunk/branch shafts
-        // per the supports anatomy. Twig parents don't fit that contract.
-        console.warn(`[LysConverter] Kickstand candidate ${id} (object ${objectId}) cannot attach to twig parent ${String(parentId)}. Skipping.`);
+        // per the supports anatomy. Twig and stick parents don't fit that contract.
+        console.warn(`[LysConverter] Kickstand candidate ${id} (object ${objectId}) cannot attach to ${parentHost.kind} parent ${String(parentId)}. Skipping.`);
         continue;
       }
 
