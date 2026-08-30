@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import * as THREE from 'three';
-import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { LysParser } from './LysParser';
+import type { DragonfruitImportFormat, Joint } from '@/supports/types';
 import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { computeLowestZ } from '@/utils/geometry';
@@ -31,11 +31,11 @@ function normalizeLysRotation(rotation: { x?: number; y?: number; z?: number } |
 /**
  * Applies model-lift-derived Z offset to converted support payload.
  */
-function applySupportZOffset(importData: any, deltaZ: number) {
+function applySupportZOffset(importData: DragonfruitImportFormat | null | undefined, deltaZ: number) {
     if (!importData || !Number.isFinite(deltaZ) || Math.abs(deltaZ) < 1e-6) return;
 
     const shiftedJointIds = new Set<string>();
-    const shiftJoint = (joint: any) => {
+    const shiftJoint = (joint: Joint | null | undefined) => {
         if (!joint || !joint.pos) return;
         const key = typeof joint.id === 'string' ? joint.id : null;
         if (key && shiftedJointIds.has(key)) return;
@@ -111,129 +111,6 @@ function applySupportZOffset(importData: any, deltaZ: number) {
     }
 }
 
-/**
- * Applies world XY offset to converted support payload.
- */
-function applySupportXYOffset(importData: any, deltaX: number, deltaY: number) {
-    if (!importData) return;
-    if ((!Number.isFinite(deltaX) || Math.abs(deltaX) < 1e-6) && (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1e-6)) return;
-
-    const shiftedJointIds = new Set<string>();
-    const shiftJoint = (joint: any) => {
-        if (!joint || !joint.pos) return;
-        const key = typeof joint.id === 'string' ? joint.id : null;
-        if (key && shiftedJointIds.has(key)) return;
-        joint.pos.x += deltaX;
-        joint.pos.y += deltaY;
-        if (key) shiftedJointIds.add(key);
-    };
-
-    for (const trunk of importData.trunks || []) {
-        for (const seg of trunk?.segments || []) {
-            shiftJoint(seg?.bottomJoint);
-            shiftJoint(seg?.topJoint);
-            if (seg?.type === 'bezier') {
-                if (seg.controlPoint1) {
-                    seg.controlPoint1.x += deltaX;
-                    seg.controlPoint1.y += deltaY;
-                }
-                if (seg.controlPoint2) {
-                    seg.controlPoint2.x += deltaX;
-                    seg.controlPoint2.y += deltaY;
-                }
-            }
-        }
-        if (trunk?.contactCone?.pos) {
-            trunk.contactCone.pos.x += deltaX;
-            trunk.contactCone.pos.y += deltaY;
-        }
-    }
-
-    for (const branch of importData.branches || []) {
-        for (const seg of branch?.segments || []) {
-            shiftJoint(seg?.bottomJoint);
-            shiftJoint(seg?.topJoint);
-            if (seg?.type === 'bezier') {
-                if (seg.controlPoint1) {
-                    seg.controlPoint1.x += deltaX;
-                    seg.controlPoint1.y += deltaY;
-                }
-                if (seg.controlPoint2) {
-                    seg.controlPoint2.x += deltaX;
-                    seg.controlPoint2.y += deltaY;
-                }
-            }
-        }
-        if (branch?.contactCone?.pos) {
-            branch.contactCone.pos.x += deltaX;
-            branch.contactCone.pos.y += deltaY;
-        }
-    }
-
-    for (const leaf of importData.leaves || []) {
-        if (leaf?.contactCone?.pos) {
-            leaf.contactCone.pos.x += deltaX;
-            leaf.contactCone.pos.y += deltaY;
-        }
-    }
-
-    for (const twig of importData.twigs || []) {
-        for (const seg of twig?.segments || []) {
-            shiftJoint(seg?.bottomJoint);
-            shiftJoint(seg?.topJoint);
-            if (seg?.type === 'bezier') {
-                if (seg.controlPoint1) {
-                    seg.controlPoint1.x += deltaX;
-                    seg.controlPoint1.y += deltaY;
-                }
-                if (seg.controlPoint2) {
-                    seg.controlPoint2.x += deltaX;
-                    seg.controlPoint2.y += deltaY;
-                }
-            }
-        }
-        if (twig?.contactDiskA?.pos) {
-            twig.contactDiskA.pos.x += deltaX;
-            twig.contactDiskA.pos.y += deltaY;
-        }
-        if (twig?.contactDiskB?.pos) {
-            twig.contactDiskB.pos.x += deltaX;
-            twig.contactDiskB.pos.y += deltaY;
-        }
-    }
-
-    for (const stick of importData.sticks || []) {
-        for (const seg of stick?.segments || []) {
-            shiftJoint(seg?.bottomJoint);
-            shiftJoint(seg?.topJoint);
-            if (seg?.type === 'bezier') {
-                if (seg.controlPoint1) {
-                    seg.controlPoint1.x += deltaX;
-                    seg.controlPoint1.y += deltaY;
-                }
-                if (seg.controlPoint2) {
-                    seg.controlPoint2.x += deltaX;
-                    seg.controlPoint2.y += deltaY;
-                }
-            }
-        }
-        if (stick?.contactConeA?.pos) {
-            stick.contactConeA.pos.x += deltaX;
-            stick.contactConeA.pos.y += deltaY;
-        }
-        if (stick?.contactConeB?.pos) {
-            stick.contactConeB.pos.x += deltaX;
-            stick.contactConeB.pos.y += deltaY;
-        }
-    }
-
-    for (const knot of importData.knots || []) {
-        if (knot?.pos) {
-            knot.pos.x += deltaX;
-            knot.pos.y += deltaY;
-        }
-    }
-}
 
 type LysImportOptions = {
     importCenterXY?: { x: number; y: number } | THREE.Vector2 | null;
@@ -253,12 +130,9 @@ export function useLysImport() {
         setIsLoading(true);
         setError(null);
 
-        const importCenterX = Number.isFinite(options?.importCenterXY?.x)
-            ? Number((options!.importCenterXY as any).x)
-            : 0;
-        const importCenterY = Number.isFinite(options?.importCenterXY?.y)
-            ? Number((options!.importCenterXY as any).y)
-            : 0;
+        const importCenter = options?.importCenterXY ?? null;
+        const importCenterX = importCenter && Number.isFinite(importCenter.x) ? Number(importCenter.x) : 0;
+        const importCenterY = importCenter && Number.isFinite(importCenter.y) ? Number(importCenter.y) : 0;
 
         try {
             // Stage 1: parse container + decode scene payload.
@@ -272,7 +146,7 @@ export function useLysImport() {
             let dragonfruitData = null;
             const importedModelId = uuidv4();
             let resolvedModelZ: number | null = null;
-            let lysTransform = {
+            const lysTransform = {
                 position: new THREE.Vector3(0, 0, 0),
                 rotation: new THREE.Euler(0, 0, 0),
                 scale: new THREE.Vector3(1, 1, 1)
@@ -287,7 +161,10 @@ export function useLysImport() {
                 }
 
                 // Extract Transform from the same object LysConverter uses
-                const objects = data.sceneData.objects.present.byId;
+                const objects = data.sceneData.objects?.present?.byId;
+                if (!objects) {
+                    throw new Error('[useLysImport] Scene payload has no objects map');
+                }
                 console.log("[useLysImport] All Object IDs:", Object.keys(objects));
 
                 let targetObj = objects['o15'];

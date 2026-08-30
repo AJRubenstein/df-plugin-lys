@@ -89,7 +89,7 @@ describe('resolveObjectGeometryMatch - match priority', () => {
     const geom = makeGeometry();
     const map = new Map([['only-key', geom]]);
     const obj = { properties: { hash: 42 } };
-    const result = resolveObjectGeometryMatch('unknown', obj as any, map);
+    const result = resolveObjectGeometryMatch('unknown', obj, map);
     assert.strictEqual(result.matchSource, 'single-shared-geometry-fallback');
   });
 

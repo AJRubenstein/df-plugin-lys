@@ -36,7 +36,7 @@ import {
   resolveSupportOwnerId,
 } from './helpers';
 import { createContactAssembly } from './contactAssembly';
-import { HostEntry, LysData, LysSupport } from './types';
+import { HostEntry, LysData, LysSupport, LysTipSettings } from './types';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtils';
 import { twigDiskJointStandoff } from '@/supports/SupportTypes/Twig/twigJointStandoff';
@@ -432,7 +432,6 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     // -----------------------------------------------------------------------
     for (const { id, s } of supportsForObject) {
       const parentIds = inferParentIds(s);
-      const supportHasChildren = hasChildren(id);
 
       if (parentIds.length === 0) {
         // Twig/stick shape checks must beat the has-children promotion: LYS can
@@ -456,7 +455,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         const explicitSingleParentHintCount = (parentBaseId ? 1 : 0) + (parentTipId ? 1 : 0);
         const hasExplicitSingleParentHint = explicitSingleParentHintCount >= 1;
         const baseIsGrounded = Number.isFinite(s.base?.z) && Math.abs((s.base?.z as number)) <= 0.2;
-        const supportType = (s as any)?.type;
+        const supportType = s.type;
         // LYS can encode single-parent kickstands as either type 1 or type 0.
         const isKickstandSourceType = !Number.isFinite(supportType) || supportType === 1 || supportType === 0;
         const isObjectTouching = s.isBaseTip === true;
@@ -482,12 +481,12 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       kickstands: result.kickstands.length,
     };
 
-    const pickTwigContactDiameter = (endpointSettings: any): number => {
+    const pickTwigContactDiameter = (endpointSettings: LysTipSettings): number => {
       const pointDiameter = endpointSettings?.pointDiameter;
-      if (Number.isFinite(pointDiameter) && pointDiameter > 0) return pointDiameter;
+      if (typeof pointDiameter === 'number' && Number.isFinite(pointDiameter) && pointDiameter > 0) return pointDiameter;
 
       const diameter = endpointSettings?.diameter;
-      if (Number.isFinite(diameter) && diameter > 0) return diameter;
+      if (typeof diameter === 'number' && Number.isFinite(diameter) && diameter > 0) return diameter;
 
       return tipDefaults.contactDiameterMm;
     };

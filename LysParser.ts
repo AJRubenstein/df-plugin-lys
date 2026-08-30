@@ -1,5 +1,17 @@
 import * as THREE from 'three';
 import { decode } from '@msgpack/msgpack';
+import type { LysData as LysSceneData } from './converter/types';
+
+/** One entry of the manifest's `mangoFiles` map: where a blob lives in the file. */
+interface LysManifestFile {
+    offset?: number;
+    size?: number;
+}
+
+/** The LYS manifest, of which only the file table is consumed here. */
+interface LysManifest {
+    mangoFiles?: Record<string, LysManifestFile>;
+}
 
 /**
  * LYS container parser.
@@ -39,7 +51,7 @@ export interface LysData {
      * Used to assign geometries to scene objects when per-object field matching fails.
      */
     geometryOrder: string[];
-    sceneData: any; // Decoded MessagePack data
+    sceneData: LysSceneData; // Decoded MessagePack data
     /** True when the primary geometry was parsed via the legacy unindexed path (stride-48 binary). */
     isLegacyGeometry: boolean;
 }
@@ -60,7 +72,7 @@ export class LysParser {
         // -------------------------------------------------------------------
         const { start, end } = this.findJsonHeader(data);
         const manifestStr = textDecoder.decode(data.subarray(start, end));
-        let manifest: any;
+        let manifest: LysManifest;
         try {
             manifest = JSON.parse(manifestStr);
         } catch (e) {
@@ -91,7 +103,7 @@ export class LysParser {
         // -------------------------------------------------------------------
         // Stage 2: resolve declared file spans (`scene.bin`, `o*.bin`, etc.).
         // -------------------------------------------------------------------
-        for (const [fname, info] of Object.entries(filesInfo) as [string, any][]) {
+        for (const [fname, info] of Object.entries(filesInfo) as [string, LysManifestFile][]) {
             const name = fname.toLowerCase();
             const offset = Number(info.offset || 0);
             const size = Number(info.size || 0);
@@ -127,7 +139,7 @@ export class LysParser {
         // -------------------------------------------------------------------
         // Stage 3: decode protected MessagePack scene payload.
         // -------------------------------------------------------------------
-        let sceneData: any = {};
+        let sceneData: LysSceneData = {};
         if (sceneBlob) {
             console.log(`[LysParser] Decoding scene.bin payload (${sceneBlob.length} bytes)...`);
                 // Byte previews are intentionally kept to simplify variant debugging.
@@ -142,18 +154,19 @@ export class LysParser {
             }
 
             try {
-                sceneData = decode(decodedPayload);
+                sceneData = decode(decodedPayload) as LysSceneData;
                 console.log('[LysParser] Scene Decoded Successfully');
-            } catch (e: any) {
+            } catch (e) {
+                const message = e instanceof Error ? e.message : String(e);
                 console.error("LysParser: Failed to decode scene msgpack", e);
-                console.error("LysParser: Msgpack error details:", e?.message);
+                console.error("LysParser: Msgpack error details:", message);
 
                 // Tail-byte diagnostics often reveal truncated/shifted payload issues.
                 const len = decodedPayload.length;
                 const tail = decodedPayload.subarray(Math.max(0, len - 16), len);
                 console.log(`[LysParser] Last 16 bytes (decoded payload):`, Array.from(tail).map(b => b.toString(16).padStart(2, '0')).join(' '));
 
-                throw new Error(`Failed to decode scene data: ${e.message}`);
+                throw new Error(`Failed to decode scene data: ${message}`);
             }
         }
 
@@ -342,7 +355,7 @@ export class LysParser {
 
             try {
                 const raw = decoder.decode(data.subarray(bounds.start, bounds.end));
-                const parsed = JSON.parse(raw) as any;
+                const parsed = JSON.parse(raw) as Record<string, unknown> | null;
                 if (parsed && typeof parsed === 'object') {
                     if (parsed.mangoFiles || parsed.version || parsed.scene) {
                         return bounds;

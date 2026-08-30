@@ -7,6 +7,7 @@
  */
 
 import { useState, useCallback, useRef } from 'react';
+import type { LysData } from './converter/types';
 import * as THREE from 'three';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import { LysConverter } from './LysConverter';
@@ -34,7 +35,7 @@ interface LysObjectTransform {
 }
 
 interface PendingImport {
-  json: any;
+  json: LysData;
   objectTransform: LysObjectTransform;
 }
 
@@ -56,7 +57,7 @@ export type ImportPhase = 'idle' | 'awaiting_stl' | 'processing';
 // Transform Extraction
 // ---------------------------------------------------------------------------
 
-function extractObjectTransform(json: any): LysObjectTransform | null {
+function extractObjectTransform(json: LysData): LysObjectTransform | null {
   const objects = json?.objects?.present?.byId;
   if (!objects) return null;
 
@@ -64,7 +65,7 @@ function extractObjectTransform(json: any): LysObjectTransform | null {
   let targetObj = objects['o15'];
   if (!targetObj) {
     for (const key in objects) {
-      if (objects[key].supportsBase?.length > 0) {
+      if ((objects[key].supportsBase?.length ?? 0) > 0) {
         targetObj = objects[key];
         break;
       }

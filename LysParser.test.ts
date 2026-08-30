@@ -1,6 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import * as THREE from 'three';
 import { LysParser } from './LysParser';
+
+/** The parser's private statics, reached deliberately: these tests cover the
+ *  geometry paths directly rather than through a whole .lys container. */
+type LysParserInternals = {
+  legacyAttrStrideScore(view: DataView, dataOffset: number, totalBytes: number): number;
+  parseLegacyGeometry(buffer: ArrayBuffer): THREE.BufferGeometry;
+  parseGeometry(buffer: ArrayBuffer): THREE.BufferGeometry;
+};
+const parserInternals = LysParser as unknown as LysParserInternals;
 
 function buildGeometryBlob(options?: {
   headerLength?: number;
@@ -84,7 +94,7 @@ describe('LysParser.legacyAttrStrideScore', () => {
   it('returns a score ≥ 5 when every 4th triplet has small XY and the others have large XY', () => {
     const buffer = buildLegacyStride48Blob(LEGACY_TRIS);
     const view = new DataView(buffer);
-    const score = (LysParser as any).legacyAttrStrideScore(view, 0, buffer.byteLength);
+    const score = parserInternals.legacyAttrStrideScore(view, 0, buffer.byteLength);
     assert.ok(score >= 5, `Expected score >= 5 for stride-48 pattern, got ${score}`);
   });
 
@@ -97,7 +107,7 @@ describe('LysParser.legacyAttrStrideScore', () => {
       view.setFloat32(i * 12 + 4, 15 + i, true);
       view.setFloat32(i * 12 + 8, 10 + i, true);
     }
-    const score = (LysParser as any).legacyAttrStrideScore(view, 0, buffer.byteLength);
+    const score = parserInternals.legacyAttrStrideScore(view, 0, buffer.byteLength);
     assert.strictEqual(score, 0, 'Score should be 0 when no attr-stride XY contrast is present');
   });
 });
@@ -105,14 +115,14 @@ describe('LysParser.legacyAttrStrideScore', () => {
 describe('LysParser.parseLegacyGeometry', () => {
   it('produces the correct vertex count from a stride-48 buffer', () => {
     const buffer = buildLegacyStride48Blob(LEGACY_TRIS);
-    const geom = (LysParser as any).parseLegacyGeometry(buffer);
+    const geom = parserInternals.parseLegacyGeometry(buffer);
     const posAttr = geom.getAttribute('position');
     assert.strictEqual(posAttr.count, 6, 'Two stride-48 triangles should yield 6 vertices');
   });
 
   it('swaps raw X↔Z when extracting positions from a stride-48 buffer', () => {
     const buffer = buildLegacyStride48Blob(LEGACY_TRIS);
-    const geom = (LysParser as any).parseLegacyGeometry(buffer);
+    const geom = parserInternals.parseLegacyGeometry(buffer);
     const positions = geom.getAttribute('position').array as Float32Array;
     // v0 raw: x=10, y=20, z=30 → after X↔Z swap: posX=30, posY=20, posZ=10
     assert.ok(Math.abs(positions[0] - 30) < 1e-4, `Position X should be raw Z (30), got ${positions[0]}`);
@@ -122,7 +132,7 @@ describe('LysParser.parseLegacyGeometry', () => {
 
   it('computes vertex normals on the resulting geometry', () => {
     const buffer = buildLegacyStride48Blob(LEGACY_TRIS);
-    const geom = (LysParser as any).parseLegacyGeometry(buffer);
+    const geom = parserInternals.parseLegacyGeometry(buffer);
     const normalAttr = geom.getAttribute('normal');
     assert.ok(normalAttr, 'Parsed legacy geometry should include a normal attribute');
     assert.ok(normalAttr.count > 0, 'Normal attribute should have at least one entry');
@@ -130,7 +140,7 @@ describe('LysParser.parseLegacyGeometry', () => {
 
   it('throws when the buffer is too short to contain any vertex data', () => {
     assert.throws(
-      () => (LysParser as any).parseLegacyGeometry(new ArrayBuffer(10)),
+      () => parserInternals.parseLegacyGeometry(new ArrayBuffer(10)),
       (err: unknown) => {
         assert.ok(err instanceof Error, 'Expected Error instance');
         return true;
@@ -170,7 +180,7 @@ function buildLysFile(stems: string[]): File {
 
 describe('LysParser.parseGeometry', () => {
   it('parses geometry payloads that declare header length larger than 20 bytes', () => {
-    const geometry = (LysParser as any).parseGeometry(buildGeometryBlob({ headerLength: 24 }));
+    const geometry = parserInternals.parseGeometry(buildGeometryBlob({ headerLength: 24 }));
 
     const posAttr = geometry.getAttribute('position');
     assert.ok(posAttr, 'Expected parsed geometry to include position attribute');
@@ -188,7 +198,7 @@ describe('LysParser.parseGeometry', () => {
     view.setUint32(12, 12, true);
 
     assert.throws(
-      () => (LysParser as any).parseGeometry(malformed),
+      () => parserInternals.parseGeometry(malformed),
       (err: unknown) => {
         assert.ok(err instanceof Error, 'Expected Error instance');
         assert.ok(!(err instanceof RangeError), 'Expected parser validation error, not typed array RangeError');

@@ -1,15 +1,14 @@
 import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import { Html } from '@react-three/drei';
 import { LysConverter } from './LysConverter';
-import { DragonfruitImportFormat, Segment } from '@/supports/types';
-
-// ... (use 'any' since LysConverter handles all LYS type parsing)
+import { DragonfruitImportFormat } from '@/supports/types';
+import type { LysData } from './converter/types';
 
 import { createDefaultSettings } from '@/supports/Settings/types';
 
 interface GhostOverlayProps {
-  data: any; // Pass raw JSON
+  /** Opaque scene payload from the host; narrowed to LysData for conversion. */
+  data: unknown;
   visible: boolean;
 }
 
@@ -18,7 +17,7 @@ export function GhostOverlay({ data, visible }: GhostOverlayProps) {
   const convertedData: DragonfruitImportFormat | null = useMemo(() => {
     if (!data) return null;
     console.log('[Ghost] Running Converter...');
-    return LysConverter.convert(data, createDefaultSettings());
+    return LysConverter.convert(data as LysData, createDefaultSettings());
   }, [data]);
 
   const ghostGeometry = useMemo(() => {

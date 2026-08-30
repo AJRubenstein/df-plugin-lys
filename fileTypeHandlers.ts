@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
-import type { PluginFileTypeDefinition } from '@/features/plugins/complexPluginContracts';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
+import type { DragonfruitImportFormat, Joint } from '@/supports/types';
 import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { LysParser } from './LysParser';
+import type { LysData, LysObject, LysSupport } from './converter/types';
 import { LysConverter } from './LysConverter';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { computeLowestZ } from '@/utils/geometry';
@@ -73,11 +74,11 @@ function normalizeLysRotation(
  *
  * Used when model min-Z alignment introduces an additional vertical offset after conversion.
  */
-function applySupportZOffset(importData: any, deltaZ: number) {
+function applySupportZOffset(importData: DragonfruitImportFormat | null | undefined, deltaZ: number) {
   if (!importData || !Number.isFinite(deltaZ) || Math.abs(deltaZ) < 1e-6) return;
 
   const shiftedJointIds = new Set<string>();
-  const shiftJoint = (joint: any) => {
+  const shiftJoint = (joint: Joint | null | undefined) => {
     if (!joint?.pos) return;
     const key = typeof joint.id === 'string' ? joint.id : null;
     if (key && shiftedJointIds.has(key)) return;
@@ -252,7 +253,7 @@ function getSingleNormalizedGeometry(
  */
 export function resolveObjectGeometryMatch(
   objId: string,
-  obj: any,
+  obj: Partial<LysObject> | null | undefined,
   geometriesByName: Map<string, THREE.BufferGeometry>,
 ): { geometry: THREE.BufferGeometry | null; matchSource: string; matchKey?: string } {
   const direct = geometriesByName.get(objId) ?? geometriesByName.get(objId.toLowerCase());
@@ -261,8 +262,8 @@ export function resolveObjectGeometryMatch(
   }
 
   // Lychee stores the geometry UUID in obj.properties.hash for multi-model scenes.
-  const propertiesHash = typeof (obj as any)?.properties?.hash === 'string'
-    ? normalizeGeometryLookupKey((obj as any).properties.hash)
+  const propertiesHash = typeof obj?.properties?.hash === 'string'
+    ? normalizeGeometryLookupKey(obj.properties.hash)
     : null;
   if (propertiesHash) {
     const byHash = geometriesByName.get(propertiesHash) ?? geometriesByName.get(propertiesHash.toLowerCase());
@@ -329,11 +330,11 @@ function normLysObjectId(val: unknown): string | null {
  * Uses `objectIdTip` / `objectIdBase` on the support. Falls back to `fallbackObjectId`.
  */
 function buildSupportsByOwner(
-  supports: Record<string, any>,
+  supports: Record<string, LysSupport>,
   objectIds: Set<string>,
   fallbackObjectId: string,
-): Map<string, Record<string, any>> {
-  const result = new Map<string, Record<string, any>>();
+): Map<string, Record<string, LysSupport>> {
+  const result = new Map<string, Record<string, LysSupport>>();
   for (const id of objectIds) result.set(id, {});
 
   for (const [sid, support] of Object.entries(supports)) {
@@ -361,10 +362,10 @@ function buildSupportsByOwner(
  */
 function convertSingleObject(
   objId: string,
-  rawObj: any,
+  rawObj: LysObject,
   objGeometry: THREE.BufferGeometry,
-  supportsForObj: Record<string, any>,
-  sceneDataForConvert: any,
+  supportsForObj: Record<string, LysSupport>,
+  sceneDataForConvert: LysData,
   settings: ReturnType<typeof createDefaultSettings>,
   importCenterX: number,
   importCenterY: number,
@@ -406,7 +407,7 @@ function convertSingleObject(
   ghostGroup.updateMatrixWorld(true);
   ghostMesh.geometry.computeBoundingSphere();
 
-  let dragonfruitData = LysConverter.convert(filteredSceneData, settings, ghostMesh);
+  const dragonfruitData = LysConverter.convert(filteredSceneData, settings, ghostMesh);
   ghostMaterial.dispose();
 
   // Stage 2: solve model Z from transformed geometry min-Z + LYS lift.
@@ -438,7 +439,7 @@ function convertSingleObject(
   LysConverter.reassignModelId(dragonfruitData, importedModelId);
 
   // Stage 3: apply deferred Z rotation + optional world XY placement.
-  const rotZDeg = Number.isFinite(rawObj.rotation?.z) ? (rawObj.rotation.z as number) : 0;
+  const rotZDeg = Number.isFinite(rawObj.rotation?.z) ? (rawObj.rotation?.z as number) : 0;
   if (Math.abs(rotZDeg) > 1e-6) {
     LysConverter.applyZRotation(dragonfruitData, position.x, position.y, rotZDeg * Math.PI / 180);
     console.log(`[lys-import] Object ${objId}: applied Z rotation: ${rotZDeg.toFixed(3)}°`);
@@ -529,8 +530,8 @@ export async function importLysFile(
   console.log('[lys-import][debug] After parser — sceneData keys:', Object.keys(data.sceneData ?? {}).join(', '));
   console.log('[lys-import][debug] sceneData.objects?.present?.byId keys:', Object.keys(data.sceneData?.objects?.present?.byId ?? {}).join(', ') || '(none)');
 
-  const objects: Record<string, any> = data.sceneData.objects.present?.byId ?? {};
-  const supports: Record<string, any> = data.sceneData.supports.present?.byId ?? {};
+  const objects: Record<string, LysObject> = data.sceneData.objects?.present?.byId ?? {};
+  const supports: Record<string, LysSupport> = data.sceneData.supports?.present?.byId ?? {};
 
   const sceneObjectIds = Object.keys(objects);
   console.log('[lys-import][debug] scene summary', {
@@ -550,7 +551,7 @@ export async function importLysFile(
   // Resolve object->geometry mapping, including heuristic fallbacks.
   const objectsWithGeometry: Array<{
     id: string;
-    obj: any;
+    obj: LysObject;
     geometry: THREE.BufferGeometry;
     matchSource: string;
     matchKey?: string;
@@ -671,7 +672,7 @@ export async function importLysFile(
   // -----------------------------------------------------------------------
   // Single-model path (legacy behavior compatibility branch).
   // -----------------------------------------------------------------------
-  let targetObj: any = null;
+  let targetObj: LysObject | null = null;
   let targetObjId: string | null = null;
 
   if (objectsWithGeometry.length === 1) {
@@ -683,7 +684,7 @@ export async function importLysFile(
     targetObj = objects['o15'] ?? null;
     if (!targetObj) {
       for (const key in objects) {
-        if (objects[key].supportsBase?.length > 0) {
+        if ((objects[key].supportsBase?.length ?? 0) > 0) {
           targetObj = objects[key];
           targetObjId = key;
           break;
@@ -736,7 +737,7 @@ export async function importLysFile(
     raycastMesh = mesh;
   }
 
-  let dragonfruitData = LysConverter.convert(sceneDataForConvert, settings, raycastMesh);
+  const dragonfruitData = LysConverter.convert(sceneDataForConvert, settings, raycastMesh);
 
   if (targetObj && dragonfruitData) {
     const position = targetObj.position ?? { x: 0, y: 0, z: 0 };
@@ -905,10 +906,7 @@ export async function importLysFile(
 // Plugin file-type handler (required export for fileType capability)
 // ---------------------------------------------------------------------------
 
-export const handleFileTypeImport: PluginFileTypeHandler = async (
-  file: File,
-  _fileTypeDefinition: PluginFileTypeDefinition,
-) => {
+export const handleFileTypeImport: PluginFileTypeHandler = async (file: File) => {
   try {
     const result = await importLysFile(file);
     return { success: true, payload: result };
