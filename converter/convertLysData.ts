@@ -998,16 +998,21 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           // (the drag triggers the canonical recompute). The model contact point
           // (contactCone.pos) is held FIXED here — only the knot-side angle/length change,
           // so authored LYS clearances at the surface are preserved.
-          if (contactCone.surfaceNormal) {
-            const { axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
-              contactCone.pos,
-              contactCone.surfaceNormal,
-              knot.pos,
-              contactCone.profile,
-            );
-            contactCone.normal = axis;
-            contactCone.profile.lengthMm = lengthMm;
-          }
+          // No authored LYS normal means no surfaceNormal here: this call site
+          // passes strictLysCoordinates, which disables the mesh raycast, so the
+          // priority list createContactAssembly documents (authored normal, then
+          // raycast, then cone axis) collapses to its first entry. Fall back to
+          // the cone axis rather than skipping the recompute, or the cone keeps
+          // its authored tip length and never reaches the knot.
+          const leafSurfaceNormal = contactCone.surfaceNormal ?? contactCone.normal;
+          const { axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
+            contactCone.pos,
+            leafSurfaceNormal,
+            knot.pos,
+            contactCone.profile,
+          );
+          contactCone.normal = axis;
+          contactCone.profile.lengthMm = lengthMm;
 
           const tipEndpoint = inferLeafTipEndpoint(endpointRoles.tipPoint, pA, pB);
           const anchorEndpoint = tipEndpoint === 'tip' ? 'base' : 'tip';

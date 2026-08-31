@@ -1217,54 +1217,59 @@ describe('LysConverter', () => {
         assert.strictEqual(result.branches.length, 1, 'Should still have 1 branch (s2)');
     });
 
-    it('should import single-parent LYS mini-supports as leaves and preserve shaft-like mini diameter', () => {
-        const MINI_LEAF_DATA = {
-            objects: {
-                present: {
-                    byId: {
-                        o1: {
-                            id: 'o1',
-                            formerCenter: { x: 0, y: 0, z: 0 },
-                            position: { x: 0, y: 0, z: 0 },
-                            rotation: { x: 0, y: 0, z: 0 },
-                            scale: { x: 1, y: 1, z: 1 },
-                        }
+    const MINI_LEAF_DATA = {
+        objects: {
+            present: {
+                byId: {
+                    o1: {
+                        id: 'o1',
+                        formerCenter: { x: 0, y: 0, z: 0 },
+                        position: { x: 0, y: 0, z: 0 },
+                        rotation: { x: 0, y: 0, z: 0 },
+                        scale: { x: 1, y: 1, z: 1 },
                     }
                 }
-            },
-            supports: {
-                present: {
-                    byId: {
-                        s_root: {
-                            id: 's_root',
-                            base: { x: 0, y: 0, z: 0 },
-                            tip: { x: 0, y: 0, z: 20 },
-                            parentId: [],
-                            objectIdTip: 'o1',
-                            objectIdBase: 'o1',
-                            settings: {
-                                tip: { diameter: 0.6, length: 3 },
-                                base: { joinDiameter: 1.0 }
-                            }
-                        },
-                        s_mini_leaf: {
-                            id: 's_mini_leaf',
-                            mini: true,
-                            base: { x: 0, y: 0, z: 8 },
-                            tip: { x: 4, y: 0, z: 10 },
-                            parentId: ['s_root'],
-                            objectIdTip: 'o1',
-                            objectIdBase: 'o1',
-                            settings: {
-                                base: { joinDiameter: 0.9 },
-                                tip: { diameter: 0.5, pointDiameter: 0.25, length: 2.0 }
-                            }
+            }
+        },
+        supports: {
+            present: {
+                byId: {
+                    s_root: {
+                        id: 's_root',
+                        base: { x: 0, y: 0, z: 0 },
+                        tip: { x: 0, y: 0, z: 20 },
+                        parentId: [],
+                        objectIdTip: 'o1',
+                        objectIdBase: 'o1',
+                        settings: {
+                            tip: { diameter: 0.6, length: 3 },
+                            base: { joinDiameter: 1.0 }
+                        }
+                    },
+                    s_mini_leaf: {
+                        id: 's_mini_leaf',
+                        mini: true,
+                        base: { x: 0, y: 0, z: 8 },
+                        tip: { x: 4, y: 0, z: 10 },
+                        // Lychee authors a tip normal on every support: two real
+                        // scenes (5052 supports between them) had one on all of
+                        // them. Without it this fixture exercised a shape the
+                        // slicer does not write.
+                        tipNormal: { x: 0.894, y: 0, z: 0.447 },
+                        parentId: ['s_root'],
+                        objectIdTip: 'o1',
+                        objectIdBase: 'o1',
+                        settings: {
+                            base: { joinDiameter: 0.9 },
+                            tip: { diameter: 0.5, pointDiameter: 0.25, length: 2.0 }
                         }
                     }
                 }
             }
-        };
+        }
+    };
 
+    it('should import single-parent LYS mini-supports as leaves and preserve shaft-like mini diameter', () => {
         const result = LysConverter.convert(MINI_LEAF_DATA, createDefaultSettings());
 
         assert.strictEqual(result.leaves.length, 1, 'Mini support should import as a leaf');
@@ -1280,6 +1285,22 @@ describe('LysConverter', () => {
 
         assert.strictEqual(leaf.contactCone.profile.bodyDiameterMm, 0.9,
             'Shaft-like mini leaf body diameter should follow base.joinDiameter');
+    });
+
+    it('should still stretch a mini leaf cone when the source authors no tip normal', () => {
+        // Guards the cone-axis fallback: this conversion path passes
+        // strictLysCoordinates, so a support with no authored tipNormal gets no
+        // surfaceNormal and no raycast either. The cone must still be aimed and
+        // lengthened to its knot rather than keeping the authored tip length.
+        const data = JSON.parse(JSON.stringify(MINI_LEAF_DATA));
+        delete data.supports.present.byId.s_mini_leaf.tipNormal;
+
+        const result = LysConverter.convert(data, createDefaultSettings());
+
+        assert.strictEqual(result.leaves.length, 1, 'Mini support should still import as a leaf');
+        const leaf = result.leaves[0];
+        assert.ok((leaf.contactCone.profile.lengthMm ?? 0) > 3.5,
+            'Cone length should reach the knot, not stay at the authored 2.0mm tip length');
     });
 
     it('should map mini leaf diameters by endpoint role (tip side vs attached side)', () => {
