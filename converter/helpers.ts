@@ -151,6 +151,11 @@ export function isTwigCandidate(
   stickVsTwigCutoffMm: number,
 ): boolean {
   // Twig candidates are floating two-normal supports below the configured length threshold.
+  //
+  // Deliberately not gated on LYS `type`: it does not encode mesh-to-mesh. LYS
+  // authors these as type 0, 1 or null (minis span all three, and the kickstand
+  // path says the same). Parentless + a normal at each end + a base off the plate
+  // already identifies a two-contact support.
   if (parentIds.length !== 0) return false;
 
   if (!hasValidNormal(s.baseNormal) || !hasValidNormal(s.tipNormal)) {
@@ -183,10 +188,6 @@ export function isTwigCandidate(
     return true;
   }
 
-  // LYS marks a mini across every `type` value, so this only screens non-minis.
-  const supportType = (s as any)?.type;
-  if (Number.isFinite(supportType) && supportType !== 1) return false;
-
   const baseZ = s.base?.z;
   if (!Number.isFinite(baseZ) || Math.abs(baseZ) <= 0.2) {
     return false;
@@ -207,9 +208,6 @@ export function isStickCandidate(
   // Stick candidates are floating two-normal supports above the twig threshold.
   if (parentIds.length !== 0) return false;
   if (isMiniSupport(s)) return false;
-
-  const supportType = (s as any)?.type;
-  if (Number.isFinite(supportType) && supportType !== 1) return false;
 
   if (!hasValidNormal(s.baseNormal) || !hasValidNormal(s.tipNormal)) {
     return false;

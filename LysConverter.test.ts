@@ -1728,6 +1728,69 @@ describe('LysConverter', () => {
         assert.strictEqual(root.transform.pos.z, 0, 'Root base should remain floor anchored at z=0');
     });
 
+    it('should import a type-0 two-contact support as a stick, not a grounded trunk', () => {
+        // Modelled on s551 from only-one-support.lys: parentless, a normal at each
+        // end, base well off the plate, mini unchecked, type 0. Screening on
+        // type === 1 sent it to the root/trunk path, which built a shaft from the
+        // plate up through the model.
+        const TYPE0_STICK = {
+            objects: {
+                present: {
+                    byId: {
+                        o1: {
+                            id: 'o1',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        s551: {
+                            id: 's551',
+                            type: 0,
+                            mini: false,
+                            isBaseTip: true,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdBase: 'o1', objectIdTip: 'o1',
+                            base: { x: 42.70, y: 51.79, z: -15.47 },
+                            tip: { x: 44.27, y: 57.25, z: -17.07 },
+                            baseNormal: { x: 0.477, y: 0.799, z: -0.368 },
+                            tipNormal: { x: -0.477, y: -0.799, z: 0.373 },
+                            settings: {
+                                base: { joinDiameter: 1.3 },
+                                baseTip: { pointDiameter: 0.5, diameter: 1.3, length: 1, isStraight: true },
+                                tip: { pointDiameter: 0.6, diameter: 1.3, length: 3 },
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(TYPE0_STICK as any, createDefaultSettings());
+
+        assert.strictEqual(result.sticks?.length ?? 0, 1, 'A 5.91mm two-contact support is a stick');
+        assert.strictEqual(result.trunks.length, 0, 'It must not become a grounded trunk');
+        assert.strictEqual(result.roots.length, 0, 'It must not create a plate root');
+
+        // Both ends contact the model, so the span must match the authored one
+        // rather than stretching down to a plate anchor.
+        const stick = result.sticks![0];
+        const seg = stick.segments[0];
+        const span = Math.hypot(
+            seg.topJoint!.pos.x - seg.bottomJoint!.pos.x,
+            seg.topJoint!.pos.y - seg.bottomJoint!.pos.y,
+            seg.topJoint!.pos.z - seg.bottomJoint!.pos.z,
+        );
+        assert.ok(span < 5.91, `stick shaft (${span.toFixed(2)}mm) must not exceed the authored 5.91mm span`);
+        assert.ok(stick.contactConeA && stick.contactConeB, 'A stick contacts the model at both ends');
+    });
+
     it('should import a mini support as a twig regardless of its LYS type', () => {
         // Lychee marks "Mini Support" across every type value. Screening on
         // type === 1 first sent type-0 minis to the root/trunk path, which built
