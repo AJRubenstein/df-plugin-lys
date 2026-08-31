@@ -694,8 +694,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
       result.sticks?.push(stick);
 
-      // Register as a host so braces/leaves attached to this stick can resolve
-      // against it in later phases, the same way twigs do.
+      // Register as a host so later phases can attach children, as twigs do.
       hostsByLysId.set(id, {
         kind: 'stick',
         shaftId: stick.id,
@@ -1221,11 +1220,9 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       });
     }
 
-    // Brace endpoints landing on the same shaft, position and diameter are one
-    // attachment point, so they share a knot. Position is quantised to 1e-3 mm
-    // (well under the finest authored geometry) to absorb float noise; diameter
-    // is part of the key because a tapered host gives different endpoints
-    // different diameters at the same t.
+    // Endpoints matching on shaft, position and diameter are one attachment
+    // point. Diameter is in the key because a tapered host gives different
+    // endpoints different diameters at the same t.
     const braceKnotByKey = new Map<string, Knot>();
     const reuseOrCreateBraceKnot = (
       parentShaftId: string,
@@ -1357,9 +1354,6 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         return braceJointDiameter;
       };
 
-      // Braces converging on one point share that knot. LYS authors a hub as a
-      // single junction; minting a knot per endpoint stacked up to 8 identical
-      // knots on one shaft, so dragging one moved only its own brace.
       const knotA = reuseOrCreateBraceKnot(
         pairing.projA.parentShaftId,
         pairing.projA.t,

@@ -151,11 +151,8 @@ export function isTwigCandidate(
   stickVsTwigCutoffMm: number,
 ): boolean {
   // Twig candidates are floating two-normal supports below the configured length threshold.
-  //
-  // Deliberately not gated on LYS `type`: it does not encode mesh-to-mesh. LYS
-  // authors these as type 0, 1 or null (minis span all three, and the kickstand
-  // path says the same). Parentless + a normal at each end + a base off the plate
-  // already identifies a two-contact support.
+  // Not gated on LYS `type`: it does not encode mesh-to-mesh, and these are
+  // authored as type 0, 1 or null.
   if (parentIds.length !== 0) return false;
 
   if (!hasValidNormal(s.baseNormal) || !hasValidNormal(s.tipNormal)) {
@@ -167,23 +164,9 @@ export function isTwigCandidate(
     return false;
   }
 
-  // A LYS "mini" support is the equivalent of a DragonFruit twig: a mesh-to-mesh
-  // support that contacts a model object at both ends. Two native-placement
-  // heuristics must NOT gate an imported mini:
-  //
-  //  1. The plate-grounding check below (base near z=0). It reads the RAW, object-
-  //     LOCAL base.z, but the builder (transformObjectPoint) applies the object's
-  //     rotation/position before placing the contact. On a rotated object the local
-  //     base.z is meaningless as a world height: a mini whose local base.z happens to
-  //     land within 0.2 of zero (e.g. 0.135) is rejected even though its true world
-  //     base sits well above the plate. Rejected here it falls through to root/trunk
-  //     and imports as the wrong support type.
-  //  2. The 5mm twig/stick length cutoff, which only exists to convert long native
-  //     mesh-to-mesh placements into sticks. An imported mini is a twig at any length.
-  //
-  // A mini is mesh-to-mesh by definition, so accept it once endpoint geometry is
-  // valid. The builder (Phase 4A) places both contacts from the transformed world
-  // points, identical to a mini that passes the non-mini path.
+  // A mini is mesh-to-mesh by definition, so it is a twig at any length, and the
+  // plate check below cannot screen it: base.z is object-local, so on a rotated
+  // object it says nothing about world height.
   if (isMiniSupport(s)) {
     return true;
   }
