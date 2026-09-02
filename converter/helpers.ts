@@ -34,7 +34,7 @@ import {
 /**
  * Extracts parent identifiers from the broad set of parent-like fields seen in LYS variants.
  */
-export function extractParentIds(s: any): string[] {
+export function extractParentIds(s: LysSupport): string[] {
   const candidate = s?.parentId ?? s?.parentIds ?? s?.parents ?? s?.parent ?? s?.hostId ?? s?.hostIds;
   if (Array.isArray(candidate)) {
     return candidate
@@ -58,7 +58,7 @@ export function extractParentIds(s: any): string[] {
 /**
  * Returns explicit parent ids when available; otherwise infers from endpoint-specific parent hints.
  */
-export function inferParentIds(s: any): string[] {
+export function inferParentIds(s: LysSupport): string[] {
   const explicit = extractParentIds(s);
   if (explicit.length > 0) return explicit;
 
@@ -79,7 +79,7 @@ export function isTruthyFlag(value: unknown): boolean {
 
 /** Determines whether a support is marked as a mini-support in source data. */
 export function isMiniSupport(s: LysSupport): boolean {
-  return isTruthyFlag((s as any)?.mini);
+  return isTruthyFlag(s.mini);
 }
 
 /** Selects the most relevant tip settings block from available LYS variants. */

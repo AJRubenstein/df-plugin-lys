@@ -2,8 +2,8 @@ import { describe, it } from 'node:test'; // using builtin test runner
 import assert from 'node:assert';
 import * as THREE from 'three';
 import { LysConverter } from './LysConverter';
-import { SupportSettings, createDefaultSettings } from '@/supports/Settings';
-import { Roots, Trunk, Branch, Brace, Knot } from '@/supports/types';
+import type { LysData } from './converter/types';
+import { createDefaultSettings } from '@/supports/Settings';
 
 // Mock Data
 const MOCK_LYS_DATA = {
@@ -164,7 +164,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BASE_SIDE_HINT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BASE_SIDE_HINT_DATA, createDefaultSettings());
         assert.strictEqual(result.branches.length, 1, 'Expected one branch from single-parent support');
 
         const branch = result.branches[0];
@@ -234,7 +234,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BASE_CLAMP_TERMINAL_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BASE_CLAMP_TERMINAL_DATA, createDefaultSettings());
         assert.strictEqual(result.branches.length, 1, 'Expected terminal explicit child to import as branch');
 
         const branch = result.branches[0];
@@ -298,7 +298,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BASE_CLAMP_LEAFLIKE_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BASE_CLAMP_LEAFLIKE_DATA, createDefaultSettings());
         assert.strictEqual(result.leaves.length, 1, 'Expected leaf-like child to import as leaf');
 
         const leaf = result.leaves[0];
@@ -368,7 +368,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BASE_CLAMP_LEAFLIKE_SMALL_Z_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BASE_CLAMP_LEAFLIKE_SMALL_Z_DATA, createDefaultSettings());
         assert.strictEqual(result.leaves.length, 1, 'Expected leaf-like child to import as leaf');
 
         const leaf = result.leaves[0];
@@ -438,7 +438,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BASE_CLAMP_ORDERING_GUARD_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BASE_CLAMP_ORDERING_GUARD_DATA, createDefaultSettings());
         assert.strictEqual(result.leaves.length, 1, 'Expected ordering-guard fixture to import as leaf');
 
         const leaf = result.leaves[0];
@@ -493,7 +493,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(STALE_PARENT_ID_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(STALE_PARENT_ID_DATA, createDefaultSettings());
 
         assert.strictEqual(result.branches.length, 1, 'Child with stale parentId should still import via explicit parent endpoint hints');
         const branch = result.branches[0];
@@ -552,7 +552,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(NORMAL_INFERRED_ENDPOINT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(NORMAL_INFERRED_ENDPOINT_DATA, createDefaultSettings());
         assert.strictEqual(result.branches.length, 1, 'Expected one branch from single-parent support');
 
         const branch = result.branches[0];
@@ -615,7 +615,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(SUPPORT_BRACE_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(SUPPORT_BRACE_DATA, createDefaultSettings());
 
         assert.strictEqual(result.trunks.length, 1, 'Expected one root trunk host');
         assert.strictEqual(result.branches.length, 0, 'Kickstand candidate should not import as branch');
@@ -719,7 +719,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BRACE_NO_HINT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BRACE_NO_HINT_DATA, createDefaultSettings());
         assert.strictEqual(result.braces.length, 1, 'Expected one inferred two-parent brace');
 
         const brace = result.braces[0];
@@ -789,7 +789,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BRACE_HINT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BRACE_HINT_DATA, createDefaultSettings());
         assert.strictEqual(result.braces.length, 1, 'Expected one brace from explicit parent hints');
 
         const brace = result.braces[0];
@@ -860,7 +860,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(STALE_BRACE_PARENT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(STALE_BRACE_PARENT_DATA, createDefaultSettings());
         assert.strictEqual(result.braces.length, 1, 'Brace should import even when parentId list is stale');
 
         const brace = result.braces[0];
@@ -953,7 +953,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(MISORDERED_BRACE_PARENT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(MISORDERED_BRACE_PARENT_DATA, createDefaultSettings());
         assert.strictEqual(result.braces.length, 1, 'Brace should import by resolving the first two valid hosts in a misordered parent list');
 
         const brace = result.braces[0];
@@ -1039,7 +1039,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(EXTRA_HOST_BRACE_PARENT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(EXTRA_HOST_BRACE_PARENT_DATA, createDefaultSettings());
         assert.strictEqual(result.braces.length, 1, 'Expected one brace from parent list with extra valid host');
         assert.strictEqual(result.trunks.length, 3, 'Expected three candidate host trunks');
 
@@ -1137,7 +1137,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(ENDPOINT_CLAMP_BRACE_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(ENDPOINT_CLAMP_BRACE_DATA, createDefaultSettings());
         assert.strictEqual(result.braces.length, 1, 'Expected one brace in endpoint-clamp fixture');
         assert.strictEqual(result.trunks.length, 2, 'Expected two host trunks in endpoint-clamp fixture');
 
@@ -1217,55 +1217,60 @@ describe('LysConverter', () => {
         assert.strictEqual(result.branches.length, 1, 'Should still have 1 branch (s2)');
     });
 
-    it('should import single-parent LYS mini-supports as leaves and preserve shaft-like mini diameter', () => {
-        const MINI_LEAF_DATA = {
-            objects: {
-                present: {
-                    byId: {
-                        o1: {
-                            id: 'o1',
-                            formerCenter: { x: 0, y: 0, z: 0 },
-                            position: { x: 0, y: 0, z: 0 },
-                            rotation: { x: 0, y: 0, z: 0 },
-                            scale: { x: 1, y: 1, z: 1 },
-                        }
+    const MINI_LEAF_DATA = {
+        objects: {
+            present: {
+                byId: {
+                    o1: {
+                        id: 'o1',
+                        formerCenter: { x: 0, y: 0, z: 0 },
+                        position: { x: 0, y: 0, z: 0 },
+                        rotation: { x: 0, y: 0, z: 0 },
+                        scale: { x: 1, y: 1, z: 1 },
                     }
                 }
-            },
-            supports: {
-                present: {
-                    byId: {
-                        s_root: {
-                            id: 's_root',
-                            base: { x: 0, y: 0, z: 0 },
-                            tip: { x: 0, y: 0, z: 20 },
-                            parentId: [],
-                            objectIdTip: 'o1',
-                            objectIdBase: 'o1',
-                            settings: {
-                                tip: { diameter: 0.6, length: 3 },
-                                base: { joinDiameter: 1.0 }
-                            }
-                        },
-                        s_mini_leaf: {
-                            id: 's_mini_leaf',
-                            mini: true,
-                            base: { x: 0, y: 0, z: 8 },
-                            tip: { x: 4, y: 0, z: 10 },
-                            parentId: ['s_root'],
-                            objectIdTip: 'o1',
-                            objectIdBase: 'o1',
-                            settings: {
-                                base: { joinDiameter: 0.9 },
-                                tip: { diameter: 0.5, pointDiameter: 0.25, length: 2.0 }
-                            }
+            }
+        },
+        supports: {
+            present: {
+                byId: {
+                    s_root: {
+                        id: 's_root',
+                        base: { x: 0, y: 0, z: 0 },
+                        tip: { x: 0, y: 0, z: 20 },
+                        parentId: [],
+                        objectIdTip: 'o1',
+                        objectIdBase: 'o1',
+                        settings: {
+                            tip: { diameter: 0.6, length: 3 },
+                            base: { joinDiameter: 1.0 }
+                        }
+                    },
+                    s_mini_leaf: {
+                        id: 's_mini_leaf',
+                        mini: true,
+                        base: { x: 0, y: 0, z: 8 },
+                        tip: { x: 4, y: 0, z: 10 },
+                        // Lychee authors a tip normal on every support: two real
+                        // scenes (5052 supports between them) had one on all of
+                        // them. Without it this fixture exercised a shape the
+                        // slicer does not write.
+                        tipNormal: { x: 0.894, y: 0, z: 0.447 },
+                        parentId: ['s_root'],
+                        objectIdTip: 'o1',
+                        objectIdBase: 'o1',
+                        settings: {
+                            base: { joinDiameter: 0.9 },
+                            tip: { diameter: 0.5, pointDiameter: 0.25, length: 2.0 }
                         }
                     }
                 }
             }
-        };
+        }
+    };
 
-        const result = LysConverter.convert(MINI_LEAF_DATA as any, createDefaultSettings());
+    it('should import single-parent LYS mini-supports as leaves and preserve shaft-like mini diameter', () => {
+        const result = LysConverter.convert(MINI_LEAF_DATA, createDefaultSettings());
 
         assert.strictEqual(result.leaves.length, 1, 'Mini support should import as a leaf');
         assert.strictEqual(result.branches.length, 0, 'Mini support should not import as a branch');
@@ -1280,6 +1285,22 @@ describe('LysConverter', () => {
 
         assert.strictEqual(leaf.contactCone.profile.bodyDiameterMm, 0.9,
             'Shaft-like mini leaf body diameter should follow base.joinDiameter');
+    });
+
+    it('should still stretch a mini leaf cone when the source authors no tip normal', () => {
+        // Guards the cone-axis fallback: this conversion path passes
+        // strictLysCoordinates, so a support with no authored tipNormal gets no
+        // surfaceNormal and no raycast either. The cone must still be aimed and
+        // lengthened to its knot rather than keeping the authored tip length.
+        const data = JSON.parse(JSON.stringify(MINI_LEAF_DATA));
+        delete data.supports.present.byId.s_mini_leaf.tipNormal;
+
+        const result = LysConverter.convert(data, createDefaultSettings());
+
+        assert.strictEqual(result.leaves.length, 1, 'Mini support should still import as a leaf');
+        const leaf = result.leaves[0];
+        assert.ok((leaf.contactCone.profile.lengthMm ?? 0) > 3.5,
+            'Cone length should reach the knot, not stay at the authored 2.0mm tip length');
     });
 
     it('should map mini leaf diameters by endpoint role (tip side vs attached side)', () => {
@@ -1332,7 +1353,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(BASE_TIP_LEAF_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(BASE_TIP_LEAF_DATA, createDefaultSettings());
         assert.strictEqual(result.leaves.length, 1, 'Expected mini baseTip support to import as a leaf');
 
         const leaf = result.leaves[0];
@@ -1403,7 +1424,7 @@ describe('LysConverter', () => {
             },
         };
 
-        const result = LysConverter.convert(CHILD_HOST_PROMOTION_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(CHILD_HOST_PROMOTION_DATA, createDefaultSettings());
 
         // Mini support with descendants must remain host-capable, not collapsed into a leaf.
         assert.strictEqual(result.leaves.length, 0, 'Mini parent with children should not collapse to leaf');
@@ -1482,7 +1503,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(NESTED_BRANCH_CHAIN_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(NESTED_BRANCH_CHAIN_DATA, createDefaultSettings());
         assert.strictEqual(result.branches.length, 2, 'Expected both supports in the chain to import as branches');
 
         const parentBranch = result.branches.find((b) =>
@@ -1563,7 +1584,7 @@ describe('LysConverter', () => {
         };
 
         try {
-            LysConverter.convert(NEGLIGIBLE_DELTA_DATA as any, createDefaultSettings());
+            LysConverter.convert(NEGLIGIBLE_DELTA_DATA, createDefaultSettings());
         } finally {
             console.warn = originalWarn;
         }
@@ -1620,7 +1641,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(MULTI_OBJECT_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(MULTI_OBJECT_DATA, createDefaultSettings());
 
         assert.strictEqual(result.roots.length, 2, 'Should produce one root per object owner');
 
@@ -1675,7 +1696,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(MIXED_OWNERSHIP_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(MIXED_OWNERSHIP_DATA, createDefaultSettings());
         assert.strictEqual(result.roots.length, 1, 'Should still produce one root');
         assert.strictEqual(result.roots[0].modelId, 'o2', 'Mixed ownership should resolve to objectIdTip');
         assert.strictEqual(result.roots[0].transform.pos.x, 20, 'Result should use o2 XY placement');
@@ -1715,7 +1736,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(STAGED_TRANSFORM_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(STAGED_TRANSFORM_DATA, createDefaultSettings());
         assert.strictEqual(result.roots.length, 1, 'Expected one generated root');
 
         const root = result.roots[0];
@@ -2058,7 +2079,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(STICK_ONLY_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(STICK_ONLY_DATA, createDefaultSettings());
 
         assert.strictEqual(result.sticks?.length ?? 0, 1, 'Expected one imported stick');
         assert.strictEqual(result.twigs?.length ?? 0, 0, 'Stick fixture should not create twigs');
@@ -2135,7 +2156,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(TWIG_ONLY_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(TWIG_ONLY_DATA, createDefaultSettings());
 
         assert.strictEqual(result.twigs?.length ?? 0, 1, 'Expected one imported twig');
         assert.strictEqual(result.sticks?.length ?? 0, 0, 'Twig fixture should not create sticks');
@@ -2196,7 +2217,7 @@ describe('LysConverter', () => {
             }
         };
 
-        const result = LysConverter.convert(NORMAL_ROTATION_DATA as any, createDefaultSettings());
+        const result = LysConverter.convert(NORMAL_ROTATION_DATA, createDefaultSettings());
         assert.strictEqual(result.trunks.length, 1, 'Expected one generated trunk');
 
         const cone = result.trunks[0].contactCone;
@@ -2210,7 +2231,7 @@ describe('LysConverter', () => {
 });
 
 describe('LysConverter.convertHollowing', () => {
-    function buildHollowingScene(opts: { enabled: boolean; outer: number }): any {
+    function buildHollowingScene(opts: { enabled: boolean; outer: number }): LysData {
         return {
             objects: {
                 present: {
@@ -2266,7 +2287,7 @@ describe('LysConverter.convertHollowing', () => {
             'Hollowing modifier should be enabled when sceneData sets enabled=true');
     });
 
-    function buildHoleScene(hole: Record<string, unknown>): any {
+    function buildHoleScene(hole: Record<string, unknown>): LysData {
         return {
             holes: {
                 present: {
@@ -2334,7 +2355,7 @@ describe('LysConverter.convertHollowing', () => {
     // Multi-part scenes: every hole carries an `objectId`. When convertHollowing
     // is scoped to one object it must keep only that object's holes, otherwise
     // each imported model receives every hole in the file.
-    function buildMultiObjectHoleScene(): any {
+    function buildMultiObjectHoleScene(): LysData {
         const hole = (id: string, objectId: string) => ({
             id,
             objectId,

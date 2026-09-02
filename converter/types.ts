@@ -55,6 +55,8 @@ export interface LysSupportSettings {
  */
 export interface LysSupport {
   id: string;
+  /** LYS support kind. Numeric in the files seen so far; compared against 0/1. */
+  type?: number | string;
   base: LysVector;
   tip: LysVector;
   isBaseTip?: boolean;
@@ -64,16 +66,33 @@ export interface LysSupport {
   settings?: LysSupportSettings;
   objectIdTip?: string | number | null;
   objectIdBase?: string | number | null;
-  parentId?: string[];
+  /** Parent-like fields vary by LYS variant; extractParentIds() reads them all. */
+  parentId?: string | string[] | number | null;
+  parentIds?: string | string[] | number | null;
+  parent?: string | string[] | number | null;
+  parents?: string | string[] | number | null;
+  hostId?: string | string[] | number | null;
+  hostIds?: string | string[] | number | null;
   parentBaseId?: string | null;
   parentTipId?: string | null;
 }
+
+/** The tip or baseTip settings block, whichever a support carries. */
+export type LysTipSettings = LysSupportSettings['tip'] | LysSupportSettings['baseTip'];
 
 /**
  * Minimal object record used for transform and ownership resolution.
  */
 export interface LysObject {
-  id: string;
+  /** LYS variants carry extra per-object metadata keys (mesh/hash references
+   *  among them) that the geometry matcher scans generically. */
+  [key: string]: unknown;
+  /** Optional: the byId map key is the authoritative id; not every variant
+   *  repeats it inside the record. */
+  id?: string;
+  /** Geometry lookup hint; present in newer variants only. */
+  properties?: { hash?: unknown };
+  hollowing?: LysHollowing;
   center?: LysVector;
   formerCenter?: LysVector;
   position?: LysVector;
@@ -82,12 +101,43 @@ export interface LysObject {
   supportsBase?: string[];
 }
 
+/** Per-object (or global preset) hollowing block as Lychee stores it. */
+export interface LysHollowing {
+  enabled?: boolean;
+  outer?: number;
+  infillEnabled?: boolean;
+  infillInterval?: number;
+}
+
+/**
+ * Minimal hole record: the converter only needs to know which object a hole
+ * belongs to and whether it is tilted.
+ */
+export interface LysHole {
+  id?: string;
+  objectId?: string | number | null;
+  /** Hole shape. Only cylinders are imported; the field sits at either level. */
+  type?: string;
+  settings?: { type?: string; diameter?: number; depth?: number };
+  tip?: LysVector;
+  tipNormal?: LysVector;
+  /** Euler degrees, global order. */
+  tipRotation?: LysVector;
+  /** Legacy variants place the hole through a 4x4 matrix instead of tip/normal. */
+  stlMatrix?: number[];
+  diameter?: number;
+  depth?: number;
+}
+
 /**
  * Minimal scene payload shape consumed by `convertLysData`.
  */
 export interface LysData {
   objects?: { present?: { byId?: Record<string, LysObject> } };
   supports?: { present?: { byId?: Record<string, LysSupport> } };
+  holes?: { present?: { byId?: Record<string, LysHole> } };
+  /** Global fallback for hollowing when no object carries its own block. */
+  settings?: { objectInfill?: { preset?: LysHollowing } };
 }
 
 /**

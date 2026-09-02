@@ -5,7 +5,8 @@ import { Joint, Vec3 } from '@/supports/types';
 import { getJointDiameter } from '@/supports/constants';
 import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtils';
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
-import { LysSupport } from './types';
+import { LysSupport, LysTipSettings } from './types';
+import type { TipProfile } from '@/supports/Settings/types';
 
 /**
  * Builds a contact-cone + socket-joint pair for a converted support endpoint.
@@ -21,8 +22,8 @@ export function createContactAssembly(
   s: LysSupport,
   tipWorld: THREE.Vector3,
   startPos: Vec3,
-  tipSettings: any,
-  tipDefaults: any,
+  tipSettings: LysTipSettings,
+  tipDefaults: TipProfile,
   mesh?: THREE.Mesh,
   preferLysTipNormal: boolean = false,
   strictLysCoordinates: boolean = false,

@@ -12,7 +12,7 @@ import type {
 import { MeshBVH } from 'three-mesh-bvh';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { convertLysData } from './converter/convertLysData';
-import { LysData } from './converter/types';
+import { LysData, LysHollowing } from './converter/types';
 
 /**
  * Resolve the inward drill direction for a tilted hole whose cylinder axis lies
@@ -270,8 +270,8 @@ export class LysConverter {
    * @param mesh Optional transformed mesh used for contact/raycast alignment.
    */
   static convert(data: LysData, settings: SupportSettings, mesh?: THREE.Mesh): DragonfruitImportFormat {
-    const objectIds = Object.keys((data as any)?.objects?.present?.byId ?? {});
-    const supportIds = Object.keys((data as any)?.supports?.present?.byId ?? {});
+    const objectIds = Object.keys(data?.objects?.present?.byId ?? {});
+    const supportIds = Object.keys(data?.supports?.present?.byId ?? {});
 
     console.log('[LysConverter][debug] convert:start', {
       objectCount: objectIds.length,
@@ -432,7 +432,7 @@ export class LysConverter {
    * @returns ModelMeshModifiers or undefined if no hollowing/hole data is found.
    */
   static convertHollowing(
-    sceneData: any,
+    sceneData: LysData | null | undefined,
     geometry?: THREE.BufferGeometry,
     geometriesByName?: Map<string, THREE.BufferGeometry>,
     isLegacyGeometry?: boolean,
@@ -460,18 +460,17 @@ export class LysConverter {
     // -----------------------------------------------------------------------
 
     // Scan all objects for per-object hollowing data.
-    let hollowingSource: any = null;
-    const objects = sceneData?.objects?.present?.byId as Record<string, any> | undefined;
+    let hollowingSource: LysHollowing | null = null;
+    const objects = sceneData?.objects?.present?.byId;
     if (objects) {
       const objectIds = Object.keys(objects);
       console.log(`[LysConverter][convertHollowing] Scanning ${objectIds.length} objects for per-object hollowing: [${objectIds.join(', ')}]`);
       for (const [objId, obj] of Object.entries(objects)) {
-        const objAny = obj as any;
-        if (objAny?.hollowing) {
-          console.log(`[LysConverter][convertHollowing] Object ${objId} has hollowing: enabled=${objAny.hollowing.enabled}, outer=${objAny.hollowing.outer}`);
-          if (objAny.hollowing.enabled === true
-              || (isLegacyGeometry && typeof objAny.hollowing.outer === 'number' && objAny.hollowing.outer > 0)) {
-            hollowingSource = objAny.hollowing;
+        if (obj?.hollowing) {
+          console.log(`[LysConverter][convertHollowing] Object ${objId} has hollowing: enabled=${obj.hollowing.enabled}, outer=${obj.hollowing.outer}`);
+          if (obj.hollowing.enabled === true
+              || (isLegacyGeometry && typeof obj.hollowing.outer === 'number' && obj.hollowing.outer > 0)) {
+            hollowingSource = obj.hollowing;
             console.log(`[LysConverter][convertHollowing] Using per-object hollowing from ${objId}`);
             break;
           }
@@ -540,14 +539,14 @@ export class LysConverter {
     // -----------------------------------------------------------------------
     // 2) Hole punches (drain holes)
     // -----------------------------------------------------------------------
-    const allHoles = sceneData?.holes?.present?.byId as Record<string, any> | undefined;
+    const allHoles = sceneData?.holes?.present?.byId;
     // In a multi-part scene every hole carries an `objectId`; keep only the ones
     // belonging to the object we're converting. Without this, each imported model
     // would receive every hole in the file. Unscoped, keep all holes.
     const holeEntries = allHoles
       ? Object.entries(allHoles).filter(([, hole]) => {
           if (!targetObjectId) return true;
-          return normLysObjectId((hole as any)?.objectId) === targetObjectId;
+          return normLysObjectId(hole?.objectId) === targetObjectId;
         })
       : [];
     console.log(`[LysConverter][convertHollowing] holes.present.byId has ${allHoles ? Object.keys(allHoles).length : 0} entries; ${holeEntries.length} match${targetObjectId ? ` object ${targetObjectId}` : ' (unscoped)'}`);
@@ -561,7 +560,7 @@ export class LysConverter {
 
       // A tilted hole's drill sign is resolved against the mesh geometry; build
       // an acceleration structure once, only when a tilted hole is present.
-      const hasTiltedHole = holeEntries.some(([, h]) => h && (h as any).tipRotation);
+      const hasTiltedHole = holeEntries.some(([, h]) => h && h.tipRotation);
       const holeBvh = hasTiltedHole && geometry?.getAttribute('position')
         ? new MeshBVH(geometry)
         : null;
@@ -608,8 +607,8 @@ export class LysConverter {
         //    anchored drain holes — see resolveDrillInward). Verified across
         //    5 files / 20 holes.
         // Some variants use a 4x4 `stlMatrix` instead — fall back to that.
-        let pos = new THREE.Vector3(0, 0, 0);
-        let dir = new THREE.Vector3(0, 0, -1);
+        const pos = new THREE.Vector3(0, 0, 0);
+        const dir = new THREE.Vector3(0, 0, -1);
 
         if (hole.tip && typeof hole.tip.x === 'number') {
           pos.set(hole.tip.x, hole.tip.y, hole.tip.z);
