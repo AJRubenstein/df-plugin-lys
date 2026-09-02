@@ -4,6 +4,7 @@ import {
   Branch,
   Knot,
   Twig,
+  Stick,
 } from '@/supports/types';
 import type { Kickstand } from '@/supports/SupportTypes/Kickstand/types';
 
@@ -97,4 +98,5 @@ export type HostEntry =
   | { kind: 'trunk'; shaftId: string; trunk: Trunk; root: Roots }
   | { kind: 'branch'; shaftId: string; branch: Branch; parentKnot: Knot }
   | { kind: 'kickstand'; shaftId: string; kickstand: Kickstand; root: Roots; hostKnot: Knot }
-  | { kind: 'twig'; shaftId: string; twig: Twig };
+  | { kind: 'twig'; shaftId: string; twig: Twig }
+  | { kind: 'stick'; shaftId: string; stick: Stick };

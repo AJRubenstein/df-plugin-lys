@@ -1728,6 +1728,293 @@ describe('LysConverter', () => {
         assert.strictEqual(root.transform.pos.z, 0, 'Root base should remain floor anchored at z=0');
     });
 
+    it('should import a type-0 two-contact support as a stick, not a grounded trunk', () => {
+        // Modelled on s551 from only-one-support.lys: parentless, a normal at each
+        // end, base well off the plate, mini unchecked, type 0. Screening on
+        // type === 1 sent it to the root/trunk path, which built a shaft from the
+        // plate up through the model.
+        const TYPE0_STICK = {
+            objects: {
+                present: {
+                    byId: {
+                        o1: {
+                            id: 'o1',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        s551: {
+                            id: 's551',
+                            type: 0,
+                            mini: false,
+                            isBaseTip: true,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdBase: 'o1', objectIdTip: 'o1',
+                            base: { x: 42.70, y: 51.79, z: -15.47 },
+                            tip: { x: 44.27, y: 57.25, z: -17.07 },
+                            baseNormal: { x: 0.477, y: 0.799, z: -0.368 },
+                            tipNormal: { x: -0.477, y: -0.799, z: 0.373 },
+                            settings: {
+                                base: { joinDiameter: 1.3 },
+                                baseTip: { pointDiameter: 0.5, diameter: 1.3, length: 1, isStraight: true },
+                                tip: { pointDiameter: 0.6, diameter: 1.3, length: 3 },
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(TYPE0_STICK as any, createDefaultSettings());
+
+        assert.strictEqual(result.sticks?.length ?? 0, 1, 'A 5.91mm two-contact support is a stick');
+        assert.strictEqual(result.trunks.length, 0, 'It must not become a grounded trunk');
+        assert.strictEqual(result.roots.length, 0, 'It must not create a plate root');
+
+        // Both ends contact the model, so the span must match the authored one
+        // rather than stretching down to a plate anchor.
+        const stick = result.sticks![0];
+        const seg = stick.segments[0];
+        const span = Math.hypot(
+            seg.topJoint!.pos.x - seg.bottomJoint!.pos.x,
+            seg.topJoint!.pos.y - seg.bottomJoint!.pos.y,
+            seg.topJoint!.pos.z - seg.bottomJoint!.pos.z,
+        );
+        assert.ok(span < 5.91, `stick shaft (${span.toFixed(2)}mm) must not exceed the authored 5.91mm span`);
+        assert.ok(stick.contactConeA && stick.contactConeB, 'A stick contacts the model at both ends');
+    });
+
+    it('should import a mini support as a twig regardless of its LYS type', () => {
+        // Lychee marks "Mini Support" across every type value. Screening on
+        // type === 1 first sent type-0 minis to the root/trunk path, which built
+        // a grounded shaft into the model instead of a mesh-to-mesh span.
+        const MINI_TYPE0 = {
+            objects: {
+                present: {
+                    byId: {
+                        o50: {
+                            id: 'o50',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        sMini: {
+                            id: 'sMini',
+                            type: 0,
+                            mini: true,
+                            isBaseTip: true,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o50', objectIdBase: 'o50',
+                            base: { x: 0, y: 0, z: -16 },
+                            tip: { x: 3, y: 0, z: -14 },
+                            baseNormal: { x: 0, y: -1, z: 0 },
+                            tipNormal: { x: 0, y: 1, z: 0 },
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                baseTip: { pointDiameter: 0.5, diameter: 1.3, length: 3, isStraight: true },
+                                tip: { pointDiameter: 0.6, diameter: 1.3, length: 3 },
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(MINI_TYPE0 as any, createDefaultSettings());
+
+        assert.strictEqual(result.twigs?.length ?? 0, 1, 'A type-0 mini must import as a twig');
+        assert.strictEqual(result.trunks.length, 0, 'A mini must not become a grounded trunk');
+        assert.strictEqual(result.roots.length, 0, 'A mini must not create a root');
+    });
+
+    it('should share one knot between braces converging on the same point', () => {
+        // LYS authors a hub as a single junction. Minting a knot per brace
+        // endpoint stacked identical knots on one shaft, so dragging one moved
+        // only its own brace.
+        const HUB_DATA = {
+            objects: {
+                present: {
+                    byId: {
+                        o40: {
+                            id: 'o40',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        sHub: {
+                            id: 'sHub', type: 0, parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 0, y: 0, z: 0 }, tip: { x: 0, y: 0, z: 30 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        sA: {
+                            id: 'sA', type: 0, parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 14, y: 0, z: 0 }, tip: { x: 14, y: 0, z: 30 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        sB: {
+                            id: 'sB', type: 0, parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: -14, y: 0, z: 0 }, tip: { x: -14, y: 0, z: 30 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        // Two braces meeting the hub at the same height.
+                        sBrace1: {
+                            id: 'sBrace1', type: 0, parentId: [],
+                            parentBaseId: 'sHub', parentTipId: 'sA',
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 0, y: 0, z: 15 }, tip: { x: 14, y: 0, z: 15 },
+                            settings: { base: { joinDiameter: 0.8 }, tip: { diameter: 0.5, length: 2 } }
+                        },
+                        sBrace2: {
+                            id: 'sBrace2', type: 0, parentId: [],
+                            parentBaseId: 'sHub', parentTipId: 'sB',
+                            objectIdTip: 'o40', objectIdBase: 'o40',
+                            base: { x: 0, y: 0, z: 15 }, tip: { x: -14, y: 0, z: 15 },
+                            settings: { base: { joinDiameter: 0.8 }, tip: { diameter: 0.5, length: 2 } }
+                        },
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(HUB_DATA as any, createDefaultSettings());
+
+        assert.strictEqual(result.braces.length, 2, 'Both braces should import');
+
+        const knotById = new Map(result.knots.map(k => [k.id, k]));
+        const [b1, b2] = result.braces;
+        const hubKnots = [b1.startKnotId, b1.endKnotId, b2.startKnotId, b2.endKnotId]
+            .map(id => knotById.get(id)!)
+            .filter(k => k !== undefined);
+        assert.strictEqual(hubKnots.length, 4, 'Every brace endpoint must resolve to a knot');
+
+        // The two hub-side endpoints land on the same shaft/position, so they
+        // must be one knot rather than two stacked ones.
+        const b2Ends = new Set([b2.startKnotId, b2.endKnotId]);
+        const shared = [b1.startKnotId, b1.endKnotId].filter(id => b2Ends.has(id));
+        assert.strictEqual(shared.length, 1, 'Braces meeting at one point should share exactly one knot');
+
+        // No knot may be stacked on another at the same shaft+position+diameter.
+        const siteKey = (k: typeof result.knots[number]) =>
+            `${k.parentShaftId}|${k.pos.x.toFixed(3)},${k.pos.y.toFixed(3)},${k.pos.z.toFixed(3)}|${k.diameter}`;
+        const sites = new Set(result.knots.map(siteKey));
+        assert.strictEqual(sites.size, result.knots.length, 'No two knots may occupy the same attachment site');
+
+        assert.ok(b1.startKnotId !== b1.endKnotId, 'A brace must not collapse to a single knot');
+        assert.ok(b2.startKnotId !== b2.endKnotId, 'A brace must not collapse to a single knot');
+    });
+
+    it('should attach braces whose parent is a stick', () => {
+        // Sticks host children exactly as twigs do; before they were registered
+        // as hosts, a brace naming one was dropped with an "unprocessed parent" warning.
+        const STICK_PARENT_BRACE_DATA = {
+            objects: {
+                present: {
+                    byId: {
+                        o30: {
+                            id: 'o30',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        // Stick: floating, two normals, parentless.
+                        sStick: {
+                            id: 'sStick', type: 1, mini: false, isBaseTip: true,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o30', objectIdBase: 'o30',
+                            base: { x: 0, y: 0, z: 10 },
+                            tip: { x: 0, y: 0, z: 25 },
+                            baseNormal: { x: 0, y: -1, z: 0 },
+                            tipNormal: { x: 0, y: 1, z: 0 },
+                            settings: {
+                                base: { joinDiameter: 1.0 },
+                                baseTip: { pointDiameter: 0.42, diameter: 1.4, length: 2.5, isStraight: true },
+                                tip: { pointDiameter: 0.28, diameter: 1.0, length: 2.5 },
+                            }
+                        },
+                        // Trunk: grounded, gives the brace a second host.
+                        sTrunk: {
+                            id: 'sTrunk', type: 0, parentId: [],
+                            parentBaseId: null, parentTipId: null,
+                            objectIdTip: 'o30', objectIdBase: 'o30',
+                            base: { x: 12, y: 0, z: 0 },
+                            tip: { x: 12, y: 0, z: 22 },
+                            settings: { base: { joinDiameter: 1.2 }, tip: { diameter: 0.6, length: 3 } }
+                        },
+                        // Brace spanning stick -> trunk.
+                        sBrace: {
+                            id: 'sBrace', type: 0, parentId: [],
+                            parentBaseId: 'sStick', parentTipId: 'sTrunk',
+                            objectIdTip: 'o30', objectIdBase: 'o30',
+                            base: { x: 0, y: 0, z: 18 },
+                            tip: { x: 12, y: 0, z: 16 },
+                            settings: { base: { joinDiameter: 0.8 }, tip: { diameter: 0.5, length: 2 } }
+                        },
+                    }
+                }
+            }
+        };
+
+        const warnings: string[] = [];
+        const originalWarn = console.warn;
+        console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+        let result;
+        try {
+            result = LysConverter.convert(STICK_PARENT_BRACE_DATA as any, createDefaultSettings());
+        } finally {
+            console.warn = originalWarn;
+        }
+
+        assert.strictEqual(result.sticks?.length ?? 0, 1, 'Expected the stick to import');
+        assert.strictEqual(result.braces.length, 1, 'Brace with a stick parent should import');
+        assert.strictEqual(
+            warnings.filter(w => w.includes('unknown/unprocessed parent')).length, 0,
+            'Stick parents must resolve, not warn as unprocessed',
+        );
+
+        const stickSegmentIds = new Set(result.sticks![0].segments.map(seg => seg.id));
+        const knotById = new Map(result.knots.map(k => [k.id, k]));
+        const brace = result.braces[0];
+        const hostedOnStick = [brace.startKnotId, brace.endKnotId]
+            .map(id => knotById.get(id))
+            .filter(k => k && stickSegmentIds.has(k.parentShaftId));
+
+        assert.strictEqual(hostedOnStick.length, 1, 'Exactly one brace end should host on the stick');
+        const knot = hostedOnStick[0]!;
+        assert.ok(knot.t !== undefined && knot.t >= 0 && knot.t <= 1, 'Stick-hosted knot t must be in range');
+        assert.ok(knot.diameter !== undefined && knot.diameter > 0, 'Stick-hosted knot needs a real diameter');
+    });
+
     it('should import floating dual-normal parentless supports as sticks with no root/knot entities', () => {
         const STICK_ONLY_DATA = {
             objects: {

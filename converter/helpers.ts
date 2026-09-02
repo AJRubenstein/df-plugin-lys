@@ -151,10 +151,9 @@ export function isTwigCandidate(
   stickVsTwigCutoffMm: number,
 ): boolean {
   // Twig candidates are floating two-normal supports below the configured length threshold.
+  // Not gated on LYS `type`: it does not encode mesh-to-mesh, and these are
+  // authored as type 0, 1 or null.
   if (parentIds.length !== 0) return false;
-
-  const supportType = (s as any)?.type;
-  if (Number.isFinite(supportType) && supportType !== 1) return false;
 
   if (!hasValidNormal(s.baseNormal) || !hasValidNormal(s.tipNormal)) {
     return false;
@@ -165,23 +164,9 @@ export function isTwigCandidate(
     return false;
   }
 
-  // A LYS "mini" support is the equivalent of a DragonFruit twig: a mesh-to-mesh
-  // support that contacts a model object at both ends. Two native-placement
-  // heuristics must NOT gate an imported mini:
-  //
-  //  1. The plate-grounding check below (base near z=0). It reads the RAW, object-
-  //     LOCAL base.z, but the builder (transformObjectPoint) applies the object's
-  //     rotation/position before placing the contact. On a rotated object the local
-  //     base.z is meaningless as a world height: a mini whose local base.z happens to
-  //     land within 0.2 of zero (e.g. 0.135) is rejected even though its true world
-  //     base sits well above the plate. Rejected here it falls through to root/trunk
-  //     and imports as the wrong support type.
-  //  2. The 5mm twig/stick length cutoff, which only exists to convert long native
-  //     mesh-to-mesh placements into sticks. An imported mini is a twig at any length.
-  //
-  // A mini is mesh-to-mesh by definition, so accept it once endpoint geometry is
-  // valid. The builder (Phase 4A) places both contacts from the transformed world
-  // points, identical to a mini that passes the non-mini path.
+  // A mini is mesh-to-mesh by definition, so it is a twig at any length, and the
+  // plate check below cannot screen it: base.z is object-local, so on a rotated
+  // object it says nothing about world height.
   if (isMiniSupport(s)) {
     return true;
   }
@@ -206,9 +191,6 @@ export function isStickCandidate(
   // Stick candidates are floating two-normal supports above the twig threshold.
   if (parentIds.length !== 0) return false;
   if (isMiniSupport(s)) return false;
-
-  const supportType = (s as any)?.type;
-  if (Number.isFinite(supportType) && supportType !== 1) return false;
 
   if (!hasValidNormal(s.baseNormal) || !hasValidNormal(s.tipNormal)) {
     return false;
@@ -528,6 +510,25 @@ function projectPointToTwigHost(
   return { ...projected, segmentId: seg.id };
 }
 
+function projectPointToStickHost(
+  host: Extract<HostEntry, { kind: 'stick' }>,
+  point: THREE.Vector3,
+): { t: number; pointOnLine: Vec3; segmentId: string } | null {
+  // Same single-segment shape as a twig; joints carry the contact standoff, so
+  // project onto the joint line rather than the cone centres.
+  const seg = host.stick.segments[0];
+  if (!seg) return null;
+
+  const startVec = seg.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+  const endVec = seg.topJoint?.pos ?? host.stick.contactConeB.pos;
+
+  const start = new THREE.Vector3(startVec.x, startVec.y, startVec.z);
+  const end = new THREE.Vector3(endVec.x, endVec.y, endVec.z);
+
+  const projected = projectPointToSegment(seg, start, end, point);
+  return { ...projected, segmentId: seg.id };
+}
+
 export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: number; pointOnLine: Vec3; parentShaftId: string } | null {
   if (host.kind === 'trunk') {
     const projection = findClosestSegment(host.trunk, host.root, { x: point.x, y: point.y, z: point.z });
@@ -552,6 +553,16 @@ export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: 
 
   if (host.kind === 'twig') {
     const projection = projectPointToTwigHost(host, point);
+    if (!projection) return null;
+    return {
+      t: projection.t,
+      pointOnLine: projection.pointOnLine,
+      parentShaftId: projection.segmentId,
+    };
+  }
+
+  if (host.kind === 'stick') {
+    const projection = projectPointToStickHost(host, point);
     if (!projection) return null;
     return {
       t: projection.t,
@@ -610,6 +621,16 @@ function getHostBaseAndTipPoints(host: HostEntry): { base: THREE.Vector3; tip: T
         host.twig.contactDiskB.pos.y,
         host.twig.contactDiskB.pos.z,
       ),
+    };
+  }
+
+  if (host.kind === 'stick') {
+    const seg = host.stick.segments[0];
+    const baseVec = seg?.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+    const tipVec = seg?.topJoint?.pos ?? host.stick.contactConeB.pos;
+    return {
+      base: new THREE.Vector3(baseVec.x, baseVec.y, baseVec.z),
+      tip: new THREE.Vector3(tipVec.x, tipVec.y, tipVec.z),
     };
   }
 
@@ -735,6 +756,31 @@ function collectHostSegmentProjectionCandidates(
       t: projected.t,
       distance,
       isEndpoint,
+      segmentIndex: 0,
+      segmentCount: 1,
+    });
+
+    return candidates;
+  }
+
+  if (host.kind === 'stick') {
+    const seg = host.stick.segments[0];
+    if (!seg) return candidates;
+
+    const startVec = seg.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+    const endVec = seg.topJoint?.pos ?? host.stick.contactConeB.pos;
+    const start: Vec3 = { x: startVec.x, y: startVec.y, z: startVec.z };
+    const end: Vec3 = { x: endVec.x, y: endVec.y, z: endVec.z };
+
+    const projected = projectPointToSegment(seg, start, end, point);
+    const projectedPoint = new THREE.Vector3(projected.pointOnLine.x, projected.pointOnLine.y, projected.pointOnLine.z);
+
+    candidates.push({
+      parentShaftId: seg.id,
+      pointOnLine: projected.pointOnLine,
+      t: projected.t,
+      distance: point.distanceTo(projectedPoint),
+      isEndpoint: projected.t <= 0.02 || projected.t >= 0.98,
       segmentIndex: 0,
       segmentCount: 1,
     });
@@ -978,6 +1024,20 @@ function projectPointToHostPreferredSide(
       y: host.twig.contactDiskB.pos.y,
       z: host.twig.contactDiskB.pos.z,
     };
+
+    const projected = projectPointToSegment(segment, start, end, point);
+    return { ...projected, parentShaftId: segment.id };
+  }
+
+  if (host.kind === 'stick') {
+    // Single segment, so preferred side is degenerate — same as the twig case.
+    const segment = host.stick.segments[0];
+    if (!segment) return null;
+
+    const startVec = segment.bottomJoint?.pos ?? host.stick.contactConeA.pos;
+    const endVec = segment.topJoint?.pos ?? host.stick.contactConeB.pos;
+    const start: Vec3 = { x: startVec.x, y: startVec.y, z: startVec.z };
+    const end: Vec3 = { x: endVec.x, y: endVec.y, z: endVec.z };
 
     const projected = projectPointToSegment(segment, start, end, point);
     return { ...projected, parentShaftId: segment.id };
