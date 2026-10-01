@@ -220,7 +220,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           .compose(new THREE.Vector3(0, 0, 0), objectQuaternion, objectScale)
           .multiply(new THREE.Matrix4().makeTranslation(-geomCenter.x, -geomCenter.y, -geomCenter.z));
         const lowest = computeLowestZ(mesh.geometry, localTransform);
-        if (Number.isFinite(lowest)) plateDropZ = -lowest - objectLiftZ;
+        if (Number.isFinite(lowest)) plateDropZ = -lowest;
       }
     }
 
