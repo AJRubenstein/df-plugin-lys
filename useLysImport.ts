@@ -65,20 +65,9 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
     }
 
     for (const branch of importData.branches || []) {
-        // A girder's column joint already sits at the plate-space height its
-        // `joinLength` names, so only the contact end follows the model -- the
-        // same split the trunk loop above makes through its socket joint.
-        const branchSocketJointId = branch?.segments && branch.segments.length > 1
-            ? branch.contactCone?.socketJointId
-            : undefined;
         for (const seg of branch?.segments || []) {
-            if (branchSocketJointId) {
-                if (seg?.bottomJoint?.id === branchSocketJointId) shiftJoint(seg.bottomJoint);
-                if (seg?.topJoint?.id === branchSocketJointId) shiftJoint(seg.topJoint);
-            } else {
-                shiftJoint(seg?.bottomJoint);
-                shiftJoint(seg?.topJoint);
-            }
+            shiftJoint(seg?.bottomJoint);
+            shiftJoint(seg?.topJoint);
             if (seg?.type === 'bezier') {
                 if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
                 if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
