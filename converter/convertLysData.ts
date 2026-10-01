@@ -15,6 +15,7 @@ import {
   Vec3,
 } from '@/supports/types';
 import { SupportSettings } from '@/supports/Settings';
+import { computeLowestZ } from '@/utils/geometry';
 import { getJointDiameter } from '@/supports/constants';
 import { buildKickstandData } from '@/supports/SupportTypes/Kickstand/kickstandBuilder';
 import type { KickstandBuildResult, KickstandPlacementLayout } from '@/supports/SupportTypes/Kickstand/types';
@@ -33,6 +34,7 @@ import {
   pickLeafEndpointDiameter,
   pickStickEndpointTipSettings,
   projectPointToHost,
+  toPlateSpaceHost,
   projectPointToHostForBrace,
   resolveSupportOwnerId,
 } from './helpers';
@@ -205,6 +207,23 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     const objectPreSupportPos = new THREE.Vector3(0, 0, objectLiftZ);
     const objectScale = new THREE.Vector3(scale.x, scale.y, scale.z);
 
+    // How far the importer drops the model onto the plate once conversion is
+    // done. Supports are built here in pre-offset space, so anything compared
+    // against a plate-space setting such as `joinLength` carries this itself.
+    let plateDropZ = 0;
+    if (mesh?.geometry) {
+      mesh.geometry.computeBoundingBox();
+      const bbox = mesh.geometry.boundingBox;
+      if (bbox) {
+        const geomCenter = bbox.getCenter(new THREE.Vector3());
+        const localTransform = new THREE.Matrix4()
+          .compose(new THREE.Vector3(0, 0, 0), objectQuaternion, objectScale)
+          .multiply(new THREE.Matrix4().makeTranslation(-geomCenter.x, -geomCenter.y, -geomCenter.z));
+        const lowest = computeLowestZ(mesh.geometry, localTransform);
+        if (Number.isFinite(lowest)) plateDropZ = -lowest - objectLiftZ;
+      }
+    }
+
     const transformObjectPoint = (v: { x: number; y: number; z: number }): THREE.Vector3 => {
       const p = new THREE.Vector3(v.x, v.y, v.z);
       p.multiply(objectScale);
@@ -256,6 +275,14 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
     const hostsByLysId = new Map<string, HostEntry>();
     const sourceSupportByLysId = new Map(supportsForObject.map(({ id, s }) => [id, s] as const));
+
+    // The plate-space heights girders are drawn to. Joints already sitting at
+    // one of these are in plate space and must not be lifted again.
+    const columnHeights = new Set<number>();
+    for (const { s } of supportsForObject) {
+      const h = gridColumnHeightMm(s);
+      if (h !== null) columnHeights.add(h);
+    }
     const childrenByParentId = new Map<string, string[]>();
     for (const { id: childId, s: childSupport } of supportsForObject) {
       const parentIds = inferParentIds(childSupport);
@@ -1164,17 +1191,24 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         ? new THREE.Vector3(rootBaseWorld.x, rootBaseWorld.y, columnJoinLength)
         : endpointRoles.attachPoint;
 
-      // The terminal reaches on past the column to meet the host, which carries
-      // its own column height. Projecting the column's own top instead puts the
-      // contact where the column already ends, leaving nothing to span.
-      const parentSource = sourceSupportByLysId.get(parentId);
-      const parentColumnHeight = parentSource ? gridColumnHeightMm(parentSource) : null;
-      const contactProbe = parentColumnHeight !== null
-        ? new THREE.Vector3(endpointRoles.attachPoint.x, endpointRoles.attachPoint.y, parentColumnHeight)
+      // The run's own contact end names where it meets the host, so that is
+      // what gets projected. It is authored in plate space like `joinLength`,
+      // and the host is only half there -- its column joint is plate-space
+      // while the rest still awaits the model drop -- so the host is lifted to
+      // match before projecting. Against the stored mix the contact lands on
+      // whichever segment happens to span the wrong height.
+      const contactProbe = columnJoinLength !== null
+        ? new THREE.Vector3(
+          endpointRoles.attachPoint.x,
+          endpointRoles.attachPoint.y,
+          endpointRoles.attachPoint.z + plateDropZ,
+        )
         : columnTopPos;
 
-      const hostProjection = projectPointToHost(parentHost, contactProbe)
-        ?? endpointRoles.attachProjection;
+      const hostProjection = projectPointToHost(
+        columnJoinLength !== null ? toPlateSpaceHost(parentHost, plateDropZ, columnHeights) : parentHost,
+        contactProbe,
+      ) ?? endpointRoles.attachProjection;
 
       let hostDiameterMm = shaftDefaults.diameterMm;
       if (parentHost.kind === 'trunk') {
