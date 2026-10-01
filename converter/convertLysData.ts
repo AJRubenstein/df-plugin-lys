@@ -1156,11 +1156,12 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const rootBaseWorld = transformRootBasePoint(rootEndpoint);
 
       // `joinLength` is the column's height above the plate, the same way the
-      // trunk path reads it. The authored endpoint only gives the direction the
-      // column leans; its own z stops well short of what LYS draws.
+      // trunk path reads it. The column stands over its own root, so it keeps
+      // the root's x/y: taking the attach point's would lean the whole shaft
+      // across to the host it only meets at the top.
       const columnJoinLength = gridColumnHeightMm(s);
       const columnTopPos = columnJoinLength !== null
-        ? new THREE.Vector3(endpointRoles.attachPoint.x, endpointRoles.attachPoint.y, columnJoinLength)
+        ? new THREE.Vector3(rootBaseWorld.x, rootBaseWorld.y, columnJoinLength)
         : endpointRoles.attachPoint;
 
       // The terminal reaches on past the column to meet the host, which carries
