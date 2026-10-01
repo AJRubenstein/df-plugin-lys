@@ -75,6 +75,12 @@ export interface LysSupport {
   hostIds?: string | string[] | number | null;
   parentBaseId?: string | null;
   parentTipId?: string | null;
+  /**
+   * Set on supports Lychee places as a grid/platform girder. Those carry a
+   * `joinLength` naming the column's height above the plate; an ordinary
+   * support leaves this null and authors its whole run in base/tip.
+   */
+  gridNodeIndex?: number | null;
 }
 
 /** The tip or baseTip settings block, whichever a support carries. */

@@ -20,6 +20,7 @@ import { buildKickstandData } from '@/supports/SupportTypes/Kickstand/kickstandB
 import type { KickstandBuildResult, KickstandPlacementLayout } from '@/supports/SupportTypes/Kickstand/types';
 import {
   applyWorldXYPlacementToSlice,
+  gridColumnHeightMm,
   inferLeafTipEndpoint,
   inferParentIds,
   isMiniSupport,
@@ -1066,19 +1067,30 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
             || tipSettings?.diameter
             || shaftDefaults.diameterMm;
 
-          const segment: Segment = {
-            id: uuidv4(),
-            type: 'straight',
-            diameter: pillarDiameter,
-            bottomJoint: undefined,
-            topJoint: socketJoint,
-          };
+          // A grid girder rises to the column height it declares and only then
+          // leans to its contact, so it carries a joint at that height. Its
+          // base/tip reach the contact alone and would draw a stub.
+          const gridColumnTopZ = gridColumnHeightMm(s);
+          const columnJoint: Joint | null = gridColumnTopZ !== null && gridColumnTopZ > knot.pos.z
+            ? {
+              id: uuidv4(),
+              pos: { x: knot.pos.x, y: knot.pos.y, z: gridColumnTopZ },
+              diameter: getJointDiameter(pillarDiameter),
+            }
+            : null;
+
+          const segments: Segment[] = columnJoint
+            ? [
+              { id: uuidv4(), type: 'straight', diameter: pillarDiameter, bottomJoint: undefined, topJoint: columnJoint },
+              { id: uuidv4(), type: 'straight', diameter: pillarDiameter, bottomJoint: columnJoint, topJoint: socketJoint },
+            ]
+            : [{ id: uuidv4(), type: 'straight', diameter: pillarDiameter, bottomJoint: undefined, topJoint: socketJoint }];
 
           const branch: Branch = {
             id: uuidv4(),
             modelId: objectId,
             parentKnotId: knot.id,
-            segments: [segment],
+            segments,
             contactCone: contactCone,
           };
 
@@ -1143,11 +1155,18 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const rootEndpoint = attachIsBaseEndpoint ? s.tip : s.base;
       const rootBaseWorld = transformRootBasePoint(rootEndpoint);
 
-      // The authored attach point is where LYS joins this column to its host,
-      // so the projection of that point is the contact. Seeking a higher one
-      // near `joinLength` moved the knot to whatever the host's top happened to
-      // be, which on a short host is nowhere near the authored junction.
-      const hostProjection = projectPointToHost(parentHost, endpointRoles.attachPoint)
+      // `joinLength` is the column's height above the plate, the same way the
+      // trunk path reads it. The authored endpoint only gives the direction the
+      // column leans; its own z stops well short of what LYS draws.
+      const columnJoinLength = gridColumnHeightMm(s);
+      const columnTopPos = columnJoinLength !== null
+        ? new THREE.Vector3(endpointRoles.attachPoint.x, endpointRoles.attachPoint.y, columnJoinLength)
+        : endpointRoles.attachPoint;
+
+      // The column's top is where LYS joins it to its host, so that point's
+      // projection is the contact. Probing for the host's own highest point
+      // put the knot nowhere near the authored junction on a short host.
+      const hostProjection = projectPointToHost(parentHost, columnTopPos)
         ?? endpointRoles.attachProjection;
 
       let hostDiameterMm = shaftDefaults.diameterMm;
@@ -1176,13 +1195,9 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           diameterMm: hostDiameterMm,
           minT: 0,
         },
-        // The column LYS drew: root to the endpoint that meets the host.
+        // The column LYS drew: root to the top its `joinLength` names.
         authoredColumn: {
-          topPos: {
-            x: endpointRoles.attachPoint.x,
-            y: endpointRoles.attachPoint.y,
-            z: endpointRoles.attachPoint.z,
-          },
+          topPos: { x: columnTopPos.x, y: columnTopPos.y, z: columnTopPos.z },
         },
       });
 
