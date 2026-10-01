@@ -1143,29 +1143,12 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const rootEndpoint = attachIsBaseEndpoint ? s.tip : s.base;
       const rootBaseWorld = transformRootBasePoint(rootEndpoint);
 
-      let hostProjection = endpointRoles.attachProjection;
-      const visibleJoinLength = Number.isFinite(s.settings?.base?.joinLength as number)
-        ? Math.max(0, s.settings?.base?.joinLength as number)
-        : null;
-      const parentVisibleJoinLength = Number.isFinite(sourceSupportByLysId.get(parentId)?.settings?.base?.joinLength as number)
-        ? Math.max(0, sourceSupportByLysId.get(parentId)?.settings?.base?.joinLength as number)
-        : null;
-      const targetAttachHeight = Math.max(visibleJoinLength ?? 0, parentVisibleJoinLength ?? 0);
-
-      // LYS kickstands are rooted columns. When joinLength is authored,
-      // seek host contact near that column height to avoid collapsing the host
-      // attach point to a low endpoint-only projection.
-      if (targetAttachHeight > 1e-4) {
-        const joinHeightProbe = new THREE.Vector3(
-          endpointRoles.attachPoint.x,
-          endpointRoles.attachPoint.y,
-          rootBaseWorld.z + targetAttachHeight,
-        );
-        const joinHeightProjection = projectPointToHost(parentHost, joinHeightProbe);
-        if (joinHeightProjection) {
-          hostProjection = joinHeightProjection;
-        }
-      }
+      // The authored attach point is where LYS joins this column to its host,
+      // so the projection of that point is the contact. Seeking a higher one
+      // near `joinLength` moved the knot to whatever the host's top happened to
+      // be, which on a short host is nowhere near the authored junction.
+      const hostProjection = projectPointToHost(parentHost, endpointRoles.attachPoint)
+        ?? endpointRoles.attachProjection;
 
       let hostDiameterMm = shaftDefaults.diameterMm;
       if (parentHost.kind === 'trunk') {
@@ -1177,24 +1160,6 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       }
 
       const hostPos = hostProjection.pointOnLine;
-
-      let layoutOverrides: Partial<KickstandPlacementLayout> | undefined;
-      if (Number.isFinite(visibleJoinLength as number) && (visibleJoinLength as number) > 1e-4) {
-        const rootTopZ = rootBaseWorld.z + rootDefaults.diskHeightMm + rootDefaults.coneHeightMm;
-        const hostRise = hostPos.z - rootTopZ;
-        const desiredColumnTopZ = rootBaseWorld.z + (visibleJoinLength as number);
-
-        if (Number.isFinite(hostRise) && hostRise > 1e-4) {
-          const desiredSecondRatioRaw = (desiredColumnTopZ - rootTopZ) / hostRise;
-          const desiredSecondRatio = THREE.MathUtils.clamp(desiredSecondRatioRaw, 0.3, 0.95);
-          const desiredFirstRatio = THREE.MathUtils.clamp(desiredSecondRatio * 0.55, 0.1, desiredSecondRatio - 0.01);
-
-          layoutOverrides = {
-            firstJointHeightRatio: desiredFirstRatio,
-            secondJointHeightRatio: desiredSecondRatio,
-          };
-        }
-      }
 
       const build = buildKickstandData({
         modelId: objectId,
@@ -1211,7 +1176,14 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           diameterMm: hostDiameterMm,
           minT: 0,
         },
-        layoutOverrides,
+        // The column LYS drew: root to the endpoint that meets the host.
+        authoredColumn: {
+          topPos: {
+            x: endpointRoles.attachPoint.x,
+            y: endpointRoles.attachPoint.y,
+            z: endpointRoles.attachPoint.z,
+          },
+        },
       });
 
       result.kickstands.push(build);
