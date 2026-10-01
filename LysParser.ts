@@ -118,7 +118,13 @@ export class LysParser {
 
             if (name === 'scene.bin') {
                 if (absOffset + size > data.length) {
-                    console.error(`[LysParser] scene.bin bounds [${absOffset}, ${absOffset + size}] exceed file size ${data.length}`);
+                    // Reading the short slice shifts the deobfuscation and surfaces
+                    // later as an opaque msgpack error, so the truncation is named here.
+                    const missing = absOffset + size - data.length;
+                    throw new Error(
+                        `scene.bin is truncated: the manifest declares ${size} bytes ending at ${absOffset + size}, `
+                        + `but the file is ${data.length} bytes (${missing} missing). The file is incomplete.`,
+                    );
                 }
                 sceneBlob = data.subarray(absOffset, absOffset + size);
             } else if (name.endsWith('.bin')) {
