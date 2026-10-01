@@ -1163,10 +1163,16 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         ? new THREE.Vector3(endpointRoles.attachPoint.x, endpointRoles.attachPoint.y, columnJoinLength)
         : endpointRoles.attachPoint;
 
-      // The column's top is where LYS joins it to its host, so that point's
-      // projection is the contact. Probing for the host's own highest point
-      // put the knot nowhere near the authored junction on a short host.
-      const hostProjection = projectPointToHost(parentHost, columnTopPos)
+      // The terminal reaches on past the column to meet the host, which carries
+      // its own column height. Projecting the column's own top instead puts the
+      // contact where the column already ends, leaving nothing to span.
+      const parentSource = sourceSupportByLysId.get(parentId);
+      const parentColumnHeight = parentSource ? gridColumnHeightMm(parentSource) : null;
+      const contactProbe = parentColumnHeight !== null
+        ? new THREE.Vector3(endpointRoles.attachPoint.x, endpointRoles.attachPoint.y, parentColumnHeight)
+        : columnTopPos;
+
+      const hostProjection = projectPointToHost(parentHost, contactProbe)
         ?? endpointRoles.attachProjection;
 
       let hostDiameterMm = shaftDefaults.diameterMm;
