@@ -34,7 +34,6 @@ import {
   pickLeafEndpointDiameter,
   pickStickEndpointTipSettings,
   projectPointToHost,
-  toPlateSpaceHost,
   projectPointToHostForBrace,
   resolveSupportOwnerId,
 } from './helpers';
@@ -276,13 +275,6 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     const hostsByLysId = new Map<string, HostEntry>();
     const sourceSupportByLysId = new Map(supportsForObject.map(({ id, s }) => [id, s] as const));
 
-    // The plate-space heights girders are drawn to. Joints already sitting at
-    // one of these are in plate space and must not be lifted again.
-    const columnHeights = new Set<number>();
-    for (const { s } of supportsForObject) {
-      const h = gridColumnHeightMm(s);
-      if (h !== null) columnHeights.add(h);
-    }
     const childrenByParentId = new Map<string, string[]>();
     for (const { id: childId, s: childSupport } of supportsForObject) {
       const parentIds = inferParentIds(childSupport);
@@ -1182,33 +1174,22 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const rootEndpoint = attachIsBaseEndpoint ? s.tip : s.base;
       const rootBaseWorld = transformRootBasePoint(rootEndpoint);
 
-      // `joinLength` is the column's height above the plate, the same way the
-      // trunk path reads it. The column stands over its own root, so it keeps
-      // the root's x/y: taking the attach point's would lean the whole shaft
-      // across to the host it only meets at the top.
+      // The column stands over its own root and the terminal does the leaning,
+      // so the top keeps the root's x/y; taking the contact's would carry the
+      // whole shaft across to the host it only meets at the top. A girder names
+      // the height in `joinLength`, quoted in final plate space and so dropped
+      // into the pre-offset space built here; any other support rises to the
+      // height its own contact sits at.
       const columnJoinLength = gridColumnHeightMm(s);
-      const columnTopPos = columnJoinLength !== null
-        ? new THREE.Vector3(rootBaseWorld.x, rootBaseWorld.y, columnJoinLength)
-        : endpointRoles.attachPoint;
+      const columnTopZ = columnJoinLength !== null
+        ? columnJoinLength - plateDropZ
+        : endpointRoles.attachPoint.z;
+      const columnTopPos = new THREE.Vector3(rootBaseWorld.x, rootBaseWorld.y, columnTopZ);
 
-      // The run's own contact end names where it meets the host, so that is
-      // what gets projected. It is authored in plate space like `joinLength`,
-      // and the host is only half there -- its column joint is plate-space
-      // while the rest still awaits the model drop -- so the host is lifted to
-      // match before projecting. Against the stored mix the contact lands on
-      // whichever segment happens to span the wrong height.
-      const contactProbe = columnJoinLength !== null
-        ? new THREE.Vector3(
-          endpointRoles.attachPoint.x,
-          endpointRoles.attachPoint.y,
-          endpointRoles.attachPoint.z + plateDropZ,
-        )
-        : columnTopPos;
-
-      const hostProjection = projectPointToHost(
-        columnJoinLength !== null ? toPlateSpaceHost(parentHost, plateDropZ, columnHeights) : parentHost,
-        contactProbe,
-      ) ?? endpointRoles.attachProjection;
+      // The run's own contact end names where it meets the host, and both are
+      // pre-offset here, so they compare directly.
+      const hostProjection = projectPointToHost(parentHost, endpointRoles.attachPoint)
+        ?? endpointRoles.attachProjection;
 
       let hostDiameterMm = shaftDefaults.diameterMm;
       if (parentHost.kind === 'trunk') {

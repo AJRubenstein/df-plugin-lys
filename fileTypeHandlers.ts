@@ -160,6 +160,18 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
   for (const knot of importData.knots || []) {
     if (knot?.pos) knot.pos.z += deltaZ;
   }
+
+  // Kickstands serialise as a bundle, so their joints and host knot live here
+  // rather than in `knots` and would otherwise never be shifted, leaving the
+  // entity split across two spaces. The root stays put: like every other root
+  // it anchors to the plate at z=0.
+  for (const build of importData.kickstands || []) {
+    for (const seg of build?.kickstand?.segments || []) {
+      shiftJoint(seg?.bottomJoint);
+      shiftJoint(seg?.topJoint);
+    }
+    if (build?.hostKnot?.pos) build.hostKnot.pos.z += deltaZ;
+  }
 }
 
 function summarizeImportSupportData(importData: ReturnType<typeof LysConverter.convert> | null | undefined) {

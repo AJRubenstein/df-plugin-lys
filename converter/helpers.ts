@@ -544,53 +544,6 @@ function projectPointToStickHost(
   return { ...projected, segmentId: seg.id };
 }
 
-/**
- * A copy of `host` with every point in plate space, for projecting points that
- * are already there. A shaft's column joint is written at the plate-space
- * `joinLength` its source quotes while everything else still awaits the
- * importer's model drop, so the drop is added to all but those joints. Ids are
- * preserved, so a projection against this view still names the real shaft.
- */
-export function toPlateSpaceHost(
-  host: HostEntry,
-  plateDropZ: number,
-  columnHeights: ReadonlySet<number>,
-): HostEntry {
-  if (!Number.isFinite(plateDropZ) || Math.abs(plateDropZ) < 1e-6) return host;
-
-  const isColumnJoint = (z: number) => {
-    for (const h of columnHeights) if (Math.abs(h - z) < 0.01) return true;
-    return false;
-  };
-  const liftJoint = (joint: Joint | undefined): Joint | undefined => (
-    joint?.pos && !isColumnJoint(joint.pos.z)
-      ? { ...joint, pos: { ...joint.pos, z: joint.pos.z + plateDropZ } }
-      : joint
-  );
-  const liftSegments = (segments: Segment[]): Segment[] => segments.map((seg) => ({
-    ...seg,
-    bottomJoint: liftJoint(seg.bottomJoint),
-    topJoint: liftJoint(seg.topJoint),
-  }));
-
-  if (host.kind === 'trunk') {
-    return { ...host, trunk: { ...host.trunk, segments: liftSegments(host.trunk.segments) } };
-  }
-  if (host.kind === 'branch') {
-    // A branch's run starts at its parent knot, not a joint of its own, so that
-    // point needs the same lift or the first segment spans two spaces.
-    const parentKnot = isColumnJoint(host.parentKnot.pos.z)
-      ? host.parentKnot
-      : { ...host.parentKnot, pos: { ...host.parentKnot.pos, z: host.parentKnot.pos.z + plateDropZ } };
-    return {
-      ...host,
-      parentKnot,
-      branch: { ...host.branch, segments: liftSegments(host.branch.segments) },
-    };
-  }
-  return host;
-}
-
 export function projectPointToHost(host: HostEntry, point: THREE.Vector3): { t: number; pointOnLine: Vec3; parentShaftId: string } | null {
   if (host.kind === 'trunk') {
     const projection = findClosestSegment(host.trunk, host.root, { x: point.x, y: point.y, z: point.z });
