@@ -87,15 +87,9 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
   };
 
   for (const trunk of importData.trunks || []) {
-    const socketJointId = trunk?.contactCone?.socketJointId;
     for (const seg of trunk?.segments || []) {
-      if (socketJointId) {
-        if (seg?.bottomJoint?.id === socketJointId) shiftJoint(seg.bottomJoint);
-        if (seg?.topJoint?.id === socketJointId) shiftJoint(seg.topJoint);
-      } else {
-        shiftJoint(seg?.bottomJoint);
-        shiftJoint(seg?.topJoint);
-      }
+      shiftJoint(seg?.bottomJoint);
+      shiftJoint(seg?.topJoint);
       if (seg?.type === 'bezier') {
         if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
         if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
@@ -105,20 +99,9 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
   }
 
   for (const branch of importData.branches || []) {
-    // A girder's column joint already sits at the plate-space height its
-    // `joinLength` names, so only the contact end follows the model -- the same
-    // split the trunk loop above makes through its socket joint.
-    const branchSocketJointId = branch?.segments && branch.segments.length > 1
-      ? branch.contactCone?.socketJointId
-      : undefined;
     for (const seg of branch?.segments || []) {
-      if (branchSocketJointId) {
-        if (seg?.bottomJoint?.id === branchSocketJointId) shiftJoint(seg.bottomJoint);
-        if (seg?.topJoint?.id === branchSocketJointId) shiftJoint(seg.topJoint);
-      } else {
-        shiftJoint(seg?.bottomJoint);
-        shiftJoint(seg?.topJoint);
-      }
+      shiftJoint(seg?.bottomJoint);
+      shiftJoint(seg?.topJoint);
       if (seg?.type === 'bezier') {
         if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
         if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
@@ -161,15 +144,14 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
     if (knot?.pos) knot.pos.z += deltaZ;
   }
 
-  // Kickstands serialise as a bundle, so their joints and host knot live here
-  // rather than in `knots` and would otherwise never be shifted, leaving the
-  // entity split across two spaces. The root stays put: like every other root
-  // it anchors to the plate at z=0.
+  // Kickstands bundle their own root and host knot rather than filing them in
+  // `roots`/`knots`, so they are shifted here or not at all.
   for (const build of importData.kickstands || []) {
     for (const seg of build?.kickstand?.segments || []) {
       shiftJoint(seg?.bottomJoint);
       shiftJoint(seg?.topJoint);
     }
+    if (build?.root?.transform?.pos) build.root.transform.pos.z += deltaZ;
     if (build?.hostKnot?.pos) build.hostKnot.pos.z += deltaZ;
   }
 }

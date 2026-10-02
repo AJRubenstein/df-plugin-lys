@@ -118,8 +118,7 @@ export class LysParser {
 
             if (name === 'scene.bin') {
                 if (absOffset + size > data.length) {
-                    // Reading the short slice shifts the deobfuscation and surfaces
-                    // later as an opaque msgpack error, so the truncation is named here.
+                    // A short slice shifts the deobfuscation into an opaque msgpack error.
                     const missing = absOffset + size - data.length;
                     throw new Error(
                         `scene.bin is truncated: the manifest declares ${size} bytes ending at ${absOffset + size}, `
@@ -623,10 +622,9 @@ export class LysParser {
     }
 
     /**
-     * Drops whole triangles carrying a non-finite coordinate. Some meshes ship a
-     * handful of NaN vertices, and a single one makes the bounding sphere NaN,
-     * which leaves the whole model unrenderable. Returns the input untouched
-     * when every coordinate is finite.
+     * Drops whole triangles carrying a non-finite coordinate; one NaN vertex makes
+     * the bounding sphere NaN and the model unrenderable. Returns the input
+     * untouched when every coordinate is finite.
      */
     private static dropNonFiniteTriangles(positions: Float32Array): Float32Array {
         const triCount = Math.floor(positions.length / 9);

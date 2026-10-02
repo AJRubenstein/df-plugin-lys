@@ -206,9 +206,8 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     const objectPreSupportPos = new THREE.Vector3(0, 0, objectLiftZ);
     const objectScale = new THREE.Vector3(scale.x, scale.y, scale.z);
 
-    // How far the importer drops the model onto the plate once conversion is
-    // done. Supports are built here in pre-offset space, so anything compared
-    // against a plate-space setting such as `joinLength` carries this itself.
+    // The drop the importer applies after conversion. Supports are built in
+    // pre-offset space, so plate-space settings subtract this themselves.
     let plateDropZ = 0;
     if (mesh?.geometry) {
       mesh.geometry.computeBoundingBox();
@@ -764,10 +763,15 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         ? Math.max(0, baseSettings?.newJoinLength as number)
         : lysVisibleJoinLength;
 
-      const joint0SolveRise = lysSolveJoinLength ?? totalBaseHeight;
-      const joint0VisibleRiseRaw = lysVisibleJoinLength ?? joint0SolveRise;
+      // `joinLength` is plate space; unconverted the knee sits a drop too high
+      // and inverts the shaft's z chain.
+      const joint0SolveRise = (lysSolveJoinLength ?? totalBaseHeight) - plateDropZ;
+      const joint0VisibleRiseRaw = lysVisibleJoinLength !== null
+        ? lysVisibleJoinLength - plateDropZ
+        : joint0SolveRise;
 
-      const minimumVisibleKneeRise = totalBaseHeight + 0.05;
+      // Clears the root collar once the drop is applied.
+      const minimumVisibleKneeRise = totalBaseHeight + 0.05 - plateDropZ;
       const joint0Rise = Math.max(joint0VisibleRiseRaw, minimumVisibleKneeRise);
       const joint0SolvePos: Vec3 = {
         x: baseRefWorld.x,
@@ -1086,10 +1090,10 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
             || tipSettings?.diameter
             || shaftDefaults.diameterMm;
 
-          // A grid girder rises to the column height it declares and only then
-          // leans to its contact, so it carries a joint at that height. Its
-          // base/tip reach the contact alone and would draw a stub.
-          const gridColumnTopZ = gridColumnHeightMm(s);
+          // A girder rises to its declared height before leaning to the contact,
+          // so it needs a joint there; base/tip alone would draw a stub.
+          const gridColumnHeight = gridColumnHeightMm(s);
+          const gridColumnTopZ = gridColumnHeight !== null ? gridColumnHeight - plateDropZ : null;
           const columnJoint: Joint | null = gridColumnTopZ !== null && gridColumnTopZ > knot.pos.z
             ? {
               id: uuidv4(),
@@ -1174,20 +1178,16 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const rootEndpoint = attachIsBaseEndpoint ? s.tip : s.base;
       const rootBaseWorld = transformRootBasePoint(rootEndpoint);
 
-      // The column stands over its own root and the terminal does the leaning,
-      // so the top keeps the root's x/y; taking the contact's would carry the
-      // whole shaft across to the host it only meets at the top. A girder names
-      // the height in `joinLength`, quoted in final plate space and so dropped
-      // into the pre-offset space built here; any other support rises to the
-      // height its own contact sits at.
+      // The column stands over its own root and the terminal leans, so the top
+      // keeps the root's x/y. A girder names its height in plate-space
+      // `joinLength`; anything else rises to its own contact.
       const columnJoinLength = gridColumnHeightMm(s);
       const columnTopZ = columnJoinLength !== null
         ? columnJoinLength - plateDropZ
         : endpointRoles.attachPoint.z;
       const columnTopPos = new THREE.Vector3(rootBaseWorld.x, rootBaseWorld.y, columnTopZ);
 
-      // The run's own contact end names where it meets the host, and both are
-      // pre-offset here, so they compare directly.
+      // Both ends are pre-offset here, so they compare directly.
       const hostProjection = projectPointToHost(parentHost, endpointRoles.attachPoint)
         ?? endpointRoles.attachProjection;
 
@@ -1204,10 +1204,11 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
       const build = buildKickstandData({
         modelId: objectId,
+        // The plate sits a drop below the space the shaft is built in.
         rootPos: {
           x: rootBaseWorld.x,
           y: rootBaseWorld.y,
-          z: rootBaseWorld.z,
+          z: rootBaseWorld.z - plateDropZ,
         },
         host: {
           segmentId: hostProjection.parentShaftId,
@@ -1217,10 +1218,11 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           diameterMm: hostDiameterMm,
           minT: 0,
         },
-        // The column LYS drew: root to the top its `joinLength` names.
-        authoredColumn: {
-          topPos: { x: columnTopPos.x, y: columnTopPos.y, z: columnTopPos.z },
-        },
+        // Only a girder names its own column; everything else authors its whole
+        // run in base/tip and takes the derived shape.
+        ...(columnJoinLength !== null
+          ? { authoredColumn: { topPos: { x: columnTopPos.x, y: columnTopPos.y, z: columnTopPos.z } } }
+          : {}),
       });
 
       result.kickstands.push(build);

@@ -79,10 +79,7 @@ export function isTruthyFlag(value: unknown): boolean {
 
 /**
  * The column height a grid/platform girder is drawn to, or null for an ordinary
- * support. Lychee gives a girder a `gridNodeIndex` and a `joinLength` measuring
- * the column above the plate, while base/tip only reach its model contact.
- * Every other support authors its whole run in base/tip and leaves
- * `joinLength` at the joint-collar default.
+ * support, whose `joinLength` is just the joint-collar default.
  */
 export function gridColumnHeightMm(s: LysSupport): number | null {
     const node = s.gridNodeIndex;
