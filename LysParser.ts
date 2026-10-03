@@ -118,7 +118,12 @@ export class LysParser {
 
             if (name === 'scene.bin') {
                 if (absOffset + size > data.length) {
-                    console.error(`[LysParser] scene.bin bounds [${absOffset}, ${absOffset + size}] exceed file size ${data.length}`);
+                    // A short slice shifts the deobfuscation into an opaque msgpack error.
+                    const missing = absOffset + size - data.length;
+                    throw new Error(
+                        `scene.bin is truncated: the manifest declares ${size} bytes ending at ${absOffset + size}, `
+                        + `but the file is ${data.length} bytes (${missing} missing). The file is incomplete.`,
+                    );
                 }
                 sceneBlob = data.subarray(absOffset, absOffset + size);
             } else if (name.endsWith('.bin')) {
@@ -463,6 +468,12 @@ export class LysParser {
         // Converting to Non-Indexed splits vertices, ensuring flat face normals.
         const flatGeometry = geometry.toNonIndexed();
 
+        const flatPositions = flatGeometry.getAttribute('position').array as Float32Array;
+        const cleaned = this.dropNonFiniteTriangles(flatPositions);
+        if (cleaned !== flatPositions) {
+            flatGeometry.setAttribute('position', new THREE.BufferAttribute(cleaned, 3));
+        }
+
         // Compute normals for lighting (will now be flat per face)
         flatGeometry.computeVertexNormals();
 
@@ -605,9 +616,35 @@ export class LysParser {
         }
 
         const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('position', new THREE.BufferAttribute(this.dropNonFiniteTriangles(positions), 3));
         geometry.computeVertexNormals();
         return geometry;
+    }
+
+    /**
+     * Drops whole triangles carrying a non-finite coordinate; one NaN vertex makes
+     * the bounding sphere NaN and the model unrenderable. Returns the input
+     * untouched when every coordinate is finite.
+     */
+    private static dropNonFiniteTriangles(positions: Float32Array): Float32Array {
+        const triCount = Math.floor(positions.length / 9);
+        const keep: number[] = [];
+        for (let t = 0; t < triCount; t++) {
+            const base = t * 9;
+            let finite = true;
+            for (let i = 0; i < 9; i++) {
+                if (!Number.isFinite(positions[base + i])) { finite = false; break; }
+            }
+            if (finite) keep.push(base);
+        }
+        if (keep.length === triCount) return positions;
+
+        console.warn(`[LysParser] Dropped ${triCount - keep.length} triangle(s) with non-finite coordinates`);
+        const out = new Float32Array(keep.length * 9);
+        for (let k = 0; k < keep.length; k++) {
+            out.set(positions.subarray(keep[k], keep[k] + 9), k * 9);
+        }
+        return out;
     }
 
     /**

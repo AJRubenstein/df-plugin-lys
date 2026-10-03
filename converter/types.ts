@@ -75,6 +75,8 @@ export interface LysSupport {
   hostIds?: string | string[] | number | null;
   parentBaseId?: string | null;
   parentTipId?: string | null;
+  /** Marks a grid/platform girder, whose `joinLength` names its column height. */
+  gridNodeIndex?: number | null;
 }
 
 /** The tip or baseTip settings block, whichever a support carries. */

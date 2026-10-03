@@ -87,15 +87,9 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
   };
 
   for (const trunk of importData.trunks || []) {
-    const socketJointId = trunk?.contactCone?.socketJointId;
     for (const seg of trunk?.segments || []) {
-      if (socketJointId) {
-        if (seg?.bottomJoint?.id === socketJointId) shiftJoint(seg.bottomJoint);
-        if (seg?.topJoint?.id === socketJointId) shiftJoint(seg.topJoint);
-      } else {
-        shiftJoint(seg?.bottomJoint);
-        shiftJoint(seg?.topJoint);
-      }
+      shiftJoint(seg?.bottomJoint);
+      shiftJoint(seg?.topJoint);
       if (seg?.type === 'bezier') {
         if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
         if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
@@ -148,6 +142,17 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
 
   for (const knot of importData.knots || []) {
     if (knot?.pos) knot.pos.z += deltaZ;
+  }
+
+  // Kickstands bundle their own root and host knot rather than filing them in
+  // `roots`/`knots`, so they are shifted here or not at all.
+  for (const build of importData.kickstands || []) {
+    for (const seg of build?.kickstand?.segments || []) {
+      shiftJoint(seg?.bottomJoint);
+      shiftJoint(seg?.topJoint);
+    }
+    if (build?.root?.transform?.pos) build.root.transform.pos.z += deltaZ;
+    if (build?.hostKnot?.pos) build.hostKnot.pos.z += deltaZ;
   }
 }
 

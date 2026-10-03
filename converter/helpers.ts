@@ -77,6 +77,18 @@ export function isTruthyFlag(value: unknown): boolean {
   return value === true || value === 1 || value === '1' || value === 'true';
 }
 
+/**
+ * The column height a grid/platform girder is drawn to, or null for an ordinary
+ * support, whose `joinLength` is just the joint-collar default.
+ */
+export function gridColumnHeightMm(s: LysSupport): number | null {
+    const node = s.gridNodeIndex;
+    if (node === null || node === undefined) return null;
+    const joinLength = s.settings?.base?.joinLength;
+    if (!Number.isFinite(joinLength as number) || (joinLength as number) <= 5) return null;
+    return joinLength as number;
+}
+
 /** Determines whether a support is marked as a mini-support in source data. */
 export function isMiniSupport(s: LysSupport): boolean {
   return isTruthyFlag(s.mini);
