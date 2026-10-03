@@ -28,7 +28,9 @@ export function createContactAssembly(
   preferLysTipNormal: boolean = false,
   strictLysCoordinates: boolean = false,
   transformedTipNormal?: THREE.Vector3 | null,
-  enforceSocketBelowTip: boolean = true
+  enforceSocketBelowTip: boolean = true,
+  /** The shaft the socket sits on; a joint built from the cone pinches the run. */
+  socketShaftDiameter?: number,
 ): { socketJoint: Joint; contactCone: ContactCone } {
   // Resolve primary geometric values from imported LYS tip settings.
   const tipLen = tipSettings?.length || tipDefaults.lengthMm;
@@ -106,7 +108,7 @@ export function createContactAssembly(
   const socketJoint: Joint = {
     id: uuidv4(),
     pos: { x: socketPosVec.x, y: socketPosVec.y, z: socketPosVec.z },
-    diameter: getJointDiameter(tipBodyDiameter)
+    diameter: getJointDiameter(socketShaftDiameter ?? tipBodyDiameter)
   };
 
   if (!coneAxis) {
@@ -143,7 +145,8 @@ export function createContactAssembly(
     type: 'disk' as const,
     lengthMm: tipLen,
     contactDiameterMm: tipSettings?.pointDiameter || tipDefaults.contactDiameterMm,
-    bodyDiameterMm: tipBodyDiameter,
+    // The wide end meets the shaft; `tip.diameter` names the cone alone.
+    bodyDiameterMm: socketShaftDiameter ?? tipBodyDiameter,
     diskThicknessMm: tipDefaults.diskThicknessMm ?? 0.1,
     maxStandoffMm: tipDefaults.maxStandoffMm ?? 0.25,
     standoffAngleThreshold: tipDefaults.standoffAngleThreshold ?? Math.PI / 4,
