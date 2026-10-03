@@ -18,7 +18,7 @@ import { SupportSettings } from '@/supports/Settings';
 import { computeLowestZ } from '@/utils/geometry';
 import { getJointDiameter } from '@/supports/constants';
 import { buildKickstandData } from '@/supports/SupportTypes/Kickstand/kickstandBuilder';
-import type { KickstandBuildResult, KickstandPlacementLayout } from '@/supports/SupportTypes/Kickstand/types';
+import type { KickstandBuildResult } from '@/supports/SupportTypes/Kickstand/types';
 import {
   applyWorldXYPlacementToSlice,
   gridColumnHeightMm,
