@@ -18,7 +18,7 @@ import { SupportSettings } from '@/supports/Settings';
 import { computeLowestZ } from '@/utils/geometry';
 import { getJointDiameter } from '@/supports/constants';
 import { buildKickstandData } from '@/supports/SupportTypes/Kickstand/kickstandBuilder';
-import type { KickstandBuildResult, KickstandPlacementLayout } from '@/supports/SupportTypes/Kickstand/types';
+import type { KickstandBuildResult } from '@/supports/SupportTypes/Kickstand/types';
 import {
   applyWorldXYPlacementToSlice,
   gridColumnHeightMm,
@@ -731,7 +731,6 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
       const tipSettings = pickContactTipSettings(s);
       const baseSettings = s.settings?.base;
-      const baseTipSettings = s.settings?.baseTip;
 
       const rootId = uuidv4();
 
@@ -782,7 +781,8 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       const joint0: Joint = {
         id: uuidv4(),
         pos: { x: baseRefWorld.x, y: baseRefWorld.y, z: joint0Z },
-        diameter: getJointDiameter(baseTipSettings?.diameter || pillarDiameter),
+        // The pillar runs through on both sides, so the joint is sized from it.
+        diameter: getJointDiameter(pillarDiameter),
       };
 
       const transformedTipNormal = s.tipNormal ? transformObjectNormal(s.tipNormal) : null;
@@ -795,14 +795,17 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         mesh,
         true,
         true,
-        transformedTipNormal
+        transformedTipNormal,
+        true,
+        pillarDiameter,
       );
 
       const segments: Segment[] = [];
       segments.push({
         id: uuidv4(),
         type: 'straight',
-        diameter: baseTipSettings?.diameter || pillarDiameter,
+        // `baseTip` is the short cone capping the pillar, not the run below it.
+        diameter: pillarDiameter,
         bottomJoint: undefined,
         topJoint: joint0,
       });
@@ -996,6 +999,10 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
         const isLeafByGeometry = shaftLength <= 0.2;
         const isLeaf = (isMiniSupport(s) || isLeafByGeometry) && !hasChildren(id);
 
+        const shaftDiameter = baseSettings?.joinDiameter
+          || tipSettings?.diameter
+          || shaftDefaults.diameterMm;
+
         const transformedTipNormal = s.tipNormal ? transformObjectNormal(s.tipNormal) : null;
         const { socketJoint, contactCone } = createContactAssembly(
           s,
@@ -1006,7 +1013,10 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
           mesh,
           true,
           true,
-          transformedTipNormal
+          transformedTipNormal,
+          true,
+          // A leaf is all cone, with no shaft to take a width from.
+          isLeaf ? undefined : shaftDiameter,
         );
 
         if (isLeaf) {
@@ -1086,9 +1096,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
           result.leaves.push(leaf);
         } else {
-          const pillarDiameter = baseSettings?.joinDiameter
-            || tipSettings?.diameter
-            || shaftDefaults.diameterMm;
+          const pillarDiameter = shaftDiameter;
 
           // A girder rises to its declared height before leaning to the contact,
           // so it needs a joint there; base/tip alone would draw a stub.
