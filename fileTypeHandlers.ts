@@ -362,6 +362,63 @@ function buildSupportsByOwner(
 }
 
 /**
+ * Joins a Lychee cavity to its outer shell as one hollow solid.
+ *
+ * Lychee keeps the two as separate meshes: the model blob is the outer surface
+ * alone, so importing it by itself gives a solid that slices filled. The cavity
+ * is already wound inward, which is what a shell's inner surface needs, so the
+ * join is a concatenation rather than a repair.
+ *
+ * Positions only. Normals are recomputed by the host's geometry prep, and any
+ * other attribute would have to be synthesised for the cavity's vertices.
+ */
+function mergeCavityIntoShell(
+  shell: THREE.BufferGeometry,
+  cavity?: THREE.BufferGeometry,
+): THREE.BufferGeometry {
+  const shellPos = shell.getAttribute('position');
+  const cavityPos = cavity?.getAttribute('position');
+  if (!shellPos || !cavityPos) return shell;
+
+  const shellArr = toSoupPositions(shell);
+  const cavityArr = toSoupPositions(cavity!);
+  if (!shellArr || !cavityArr) return shell;
+
+  const merged = new Float32Array(shellArr.length + cavityArr.length);
+  merged.set(shellArr, 0);
+  merged.set(cavityArr, shellArr.length);
+
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(merged, 3));
+  console.log(
+    `[lys-import] Merged cavity into shell: ${shellArr.length / 9} + ${cavityArr.length / 9} `
+    + `= ${merged.length / 9} triangles`,
+  );
+  return out;
+}
+
+/** Positions as a flat triangle soup, resolving an index if one is present. */
+function toSoupPositions(geometry: THREE.BufferGeometry): Float32Array | null {
+  const attr = geometry.getAttribute('position');
+  if (!attr) return null;
+  const src = attr.array as ArrayLike<number>;
+  const index = geometry.getIndex();
+  if (!index) {
+    return src instanceof Float32Array ? src : Float32Array.from(src);
+  }
+  const idx = index.array as ArrayLike<number>;
+  const soup = new Float32Array(idx.length * 3);
+  for (let i = 0; i < idx.length; i += 1) {
+    const s = idx[i] * 3;
+    const d = i * 3;
+    soup[d] = src[s];
+    soup[d + 1] = src[s + 1];
+    soup[d + 2] = src[s + 2];
+  }
+  return soup;
+}
+
+/**
  * Convert a single LYS object and its associated supports into a `LysImportPayload`.
  * `sceneDataForConvert` must already have Z-stripped rotations applied.
  */
@@ -487,9 +544,15 @@ function convertSingleObject(
   );
   console.log('[lys-import][debug] convertSingleObject meshModifiers:', meshModifiers ? `hollowing=${!!meshModifiers.hollowing} holes=${meshModifiers.holePunches?.length ?? 0}` : 'undefined');
 
+  // Last, after the supports are solved and the Z is read off the outer surface:
+  // both need the shell alone, and the merged mesh is a different solid.
+  const geometry = meshModifiers?.hollowing
+    ? mergeCavityIntoShell(objGeometry, cavityGeometry)
+    : objGeometry;
+
   return {
     modelId: importedModelId,
-    geometry: objGeometry,
+    geometry,
     transform,
     supportData: dragonfruitData,
     meshModifiers,
