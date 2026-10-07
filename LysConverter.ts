@@ -514,20 +514,32 @@ export class LysConverter {
       // Lychee pre-computes the cavity interior mesh and stores it with a
       // `_hollowing` suffix (e.g. `<hash>_hollowing`). Extract it so DragonFruit's
       // Interior View can display the pre-baked cavity without re-hollowing.
-      if (geometriesByName) {
-        for (const [stem, cavityGeom] of geometriesByName) {
-          if (stem.toLowerCase().endsWith('_hollowing')) {
-            const posAttr = cavityGeom.getAttribute('position');
-            if (posAttr) {
-              const positions = posAttr.array as Float32Array;
-              const cavityBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
-              hollowingModifier.cavityPositionsBase64 = bytesToBase64(cavityBytes);
-              hollowingModifier.cavityPositionCount = positions.length / 3;
-              console.log(`[LysConverter][convertHollowing] Extracted _hollowing cavity mesh from "${stem}": ${positions.length / 3} vertices`);
-            }
+      //
+      // Scoped the same way the hole pass below scopes its cavity: a multi-part
+      // caller passes this object's own mesh, and an object without one is not
+      // hollowed, so it gets no cavity rather than the first one in the file.
+      // Unscoped, the single-model path keeps taking the only `_hollowing` mesh.
+      let modifierCavity: THREE.BufferGeometry | null = null;
+      if (targetObjectId) {
+        modifierCavity = options?.cavityGeometry ?? null;
+      } else if (geometriesByName) {
+        for (const [stem, g] of geometriesByName) {
+          if (stem.toLowerCase().endsWith('_hollowing') && g.getAttribute('position')) {
+            modifierCavity = g;
             break;
           }
         }
+      }
+
+      const cavityPosAttr = modifierCavity?.getAttribute('position');
+      if (cavityPosAttr) {
+        const positions = cavityPosAttr.array as Float32Array;
+        const cavityBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
+        hollowingModifier.cavityPositionsBase64 = bytesToBase64(cavityBytes);
+        hollowingModifier.cavityPositionCount = positions.length / 3;
+        console.log(`[LysConverter][convertHollowing] Cavity mesh: ${positions.length / 3} vertices`);
+      } else if (targetObjectId) {
+        console.log(`[LysConverter][convertHollowing] Object ${targetObjectId} has no cavity mesh of its own`);
       }
 
       result.hollowing = hollowingModifier;
