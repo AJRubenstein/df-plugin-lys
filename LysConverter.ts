@@ -504,11 +504,9 @@ export class LysConverter {
         infillCellMm: hollowingSource.infillInterval ?? 5,
         infillBeamRadiusMm: 0.5,
         openFace: 'z_max',
-        // Mark as baked — Lychee already pre-computed the cavity mesh (stored
-        // as `_hollowing` geometry). This keeps the hollowing panel from
-        // offering to re-apply voxel hollowing when the cavity is already
-        // available for Interior View.
-        bakedIntoGeometry: true,
+        // Not baked here: the cavity travels beside the shell and the host
+        // decides whether to join them, so it sets this to match that choice.
+        bakedIntoGeometry: false,
       };
 
       // Lychee pre-computes the cavity interior mesh and stores it with a
