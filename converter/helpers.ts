@@ -294,7 +294,7 @@ export function resolveSupportOwnerId(
 
 export function applyWorldXYPlacementToSlice(
   data: DragonfruitImportFormat & { kickstands?: KickstandBuildResult[] },
-  start: { roots: number; trunks: number; branches: number; leaves: number; twigs: number; sticks: number; knots: number; kickstands: number },
+  start: { roots: number; trunks: number; branches: number; leaves: number; twigs: number; sticks: number; stumps: number; knots: number; kickstands: number },
   offsetX: number,
   offsetY: number,
 ): void {
@@ -377,6 +377,15 @@ export function applyWorldXYPlacementToSlice(
     }
     shiftPos(stick.contactConeA?.pos);
     shiftPos(stick.contactConeB?.pos);
+  }
+
+  // The frustum root is the stump's own lower end, so it shifts here rather
+  // than through `roots`.
+  for (let i = start.stumps; i < (data.stumps?.length || 0); i++) {
+    const stump = data.stumps![i];
+    shiftPos(stump.rootPos);
+    shiftJoint(stump.joint);
+    shiftPos(stump.contactCone?.pos);
   }
 
   for (let i = start.knots; i < data.knots.length; i++) {

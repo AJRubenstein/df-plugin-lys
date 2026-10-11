@@ -107,6 +107,7 @@ export class LysConverter {
     return {
       roots: data.roots?.length ?? 0,
       trunks: data.trunks?.length ?? 0,
+      stumps: data.stumps?.length ?? 0,
       branches: data.branches?.length ?? 0,
       leaves: data.leaves?.length ?? 0,
       twigs: data.twigs?.length ?? 0,
@@ -122,6 +123,7 @@ export class LysConverter {
     const ids = new Set<string>();
     for (const root of data.roots || []) if (root?.modelId) ids.add(root.modelId);
     for (const trunk of data.trunks || []) if (trunk?.modelId) ids.add(trunk.modelId);
+    for (const stump of data.stumps || []) if (stump?.modelId) ids.add(stump.modelId);
     for (const branch of data.branches || []) if (branch?.modelId) ids.add(branch.modelId);
     for (const leaf of data.leaves || []) if (leaf?.modelId) ids.add(leaf.modelId);
     for (const twig of data.twigs || []) if (twig?.modelId) ids.add(twig.modelId);
@@ -145,6 +147,7 @@ export class LysConverter {
 
     for (const root of data.roots) root.modelId = modelId;
     for (const trunk of data.trunks) trunk.modelId = modelId;
+    for (const stump of data.stumps || []) stump.modelId = modelId;
     for (const branch of data.branches) branch.modelId = modelId;
     for (const leaf of data.leaves) leaf.modelId = modelId;
     for (const twig of data.twigs || []) twig.modelId = modelId;
@@ -242,6 +245,14 @@ export class LysConverter {
       }
       shiftPos(stick.contactConeA?.pos);
       shiftPos(stick.contactConeB?.pos);
+    }
+
+    // The frustum root is the stump's own lower end, so it shifts here rather
+    // than through `roots`.
+    for (const stump of data.stumps || []) {
+      shiftPos(stump.rootPos);
+      shiftJoint(stump.joint);
+      shiftPos(stump.contactCone?.pos);
     }
 
     for (const knot of data.knots) {
@@ -397,6 +408,16 @@ export class LysConverter {
       rotPos(stick.contactConeB.pos);
       rotDir(stick.contactConeB.normal);
       if (stick.contactConeB.surfaceNormal) rotDir(stick.contactConeB.surfaceNormal);
+    }
+
+    for (const stump of data.stumps || []) {
+      rotPos(stump.rootPos);
+      rotJoint(stump.joint);
+      if (stump.contactCone) {
+        rotPos(stump.contactCone.pos);
+        rotDir(stump.contactCone.normal);
+        if (stump.contactCone.surfaceNormal) rotDir(stump.contactCone.surfaceNormal);
+      }
     }
 
     for (const knot of data.knots) {

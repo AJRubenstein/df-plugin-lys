@@ -38,6 +38,7 @@ import {
   resolveSupportOwnerId,
 } from './helpers';
 import { createContactAssembly } from './contactAssembly';
+import { buildStumpFromLysSupport, STUMP_TIP_HEIGHT_MAX_MM } from './stumpFromLys';
 import { HostEntry, LysData, LysSupport, LysTipSettings } from './types';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtils';
@@ -140,6 +141,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
     twigs: [],
     sticks: [],
     braces: [],
+    stumps: [],
     knots: [],
     kickstands: [],
   };
@@ -496,6 +498,7 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
       leaves: result.leaves.length,
       twigs: result.twigs?.length || 0,
       sticks: result.sticks?.length || 0,
+      stumps: result.stumps?.length || 0,
       knots: result.knots.length,
       kickstands: result.kickstands.length,
     };
@@ -731,6 +734,29 @@ export function convertLysData(data: LysData, settings: SupportSettings, mesh?: 
 
       const tipSettings = pickContactTipSettings(s);
       const baseSettings = s.settings?.base;
+
+      // Plate height of the contact once the importer's drop lands, which is
+      // what the host measures its near-plate band against. A support carrying
+      // children stays a trunk: a stump has no edges, so they would be lost.
+      const tipPlateHeight = tipWorld.z - objectLiftZ + plateDropZ;
+      if (tipPlateHeight < STUMP_TIP_HEIGHT_MAX_MM && !hasChildren(id)) {
+        const stump = buildStumpFromLysSupport({
+          s,
+          objectId,
+          tipWorld,
+          baseRefWorld,
+          tipSettings,
+          tipDefaults,
+          transformedTipNormal: s.tipNormal ? transformObjectNormal(s.tipNormal) : null,
+          mesh,
+          plateDropZ,
+        });
+        // A refused stub stays a trunk, which handles a plate-level contact.
+        if (stump) {
+          result.stumps!.push(stump);
+          continue;
+        }
+      }
 
       const rootId = uuidv4();
 

@@ -124,6 +124,13 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
     if (stick?.contactConeB?.pos) stick.contactConeB.pos.z += deltaZ;
   }
 
+  // A stump's frustum root is plate-pinned, as `roots` is, so only its joint
+  // and contact ride the drop.
+  for (const stump of importData.stumps || []) {
+    shiftJoint(stump?.joint);
+    if (stump?.contactCone?.pos) stump.contactCone.pos.z += deltaZ;
+  }
+
   for (const knot of importData.knots || []) {
     if (knot?.pos) knot.pos.z += deltaZ;
   }
@@ -145,6 +152,7 @@ function summarizeImportSupportData(importData: ReturnType<typeof LysConverter.c
     return {
       roots: 0,
       trunks: 0,
+      stumps: 0,
       branches: 0,
       leaves: 0,
       twigs: 0,
@@ -158,6 +166,7 @@ function summarizeImportSupportData(importData: ReturnType<typeof LysConverter.c
   return {
     roots: importData.roots?.length ?? 0,
     trunks: importData.trunks?.length ?? 0,
+    stumps: importData.stumps?.length ?? 0,
     branches: importData.branches?.length ?? 0,
     leaves: importData.leaves?.length ?? 0,
     twigs: importData.twigs?.length ?? 0,

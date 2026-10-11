@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { LysConverter } from './LysConverter';
 import type { LysData } from './converter/types';
 import { createDefaultSettings } from '@/supports/Settings';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 
 // Mock Data
 const MOCK_LYS_DATA = {
@@ -1810,6 +1811,156 @@ describe('LysConverter', () => {
         );
         assert.ok(span < 5.91, `stick shaft (${span.toFixed(2)}mm) must not exceed the authored 5.91mm span`);
         assert.ok(stick.contactConeA && stick.contactConeB, 'A stick contacts the model at both ends');
+    });
+
+
+    it('should import a grounded support in the near-plate band as a stump', () => {
+        // The host reserves tipHeight < 5mm for stumps (supportTypeRegistry
+        // placementRule). A trunk here would be a tall pillar under a 3mm tip.
+        const SHORT_GROUNDED: LysData = {
+            objects: {
+                present: {
+                    byId: {
+                        o1: {
+                            id: 'o1',
+                            formerCenter: { x: 0, y: 0, z: 0 },
+                            position: { x: 0, y: 0, z: 0 },
+                            rotation: { x: 0, y: 0, z: 0 },
+                            scale: { x: 1, y: 1, z: 1 },
+                        }
+                    }
+                }
+            },
+            supports: {
+                present: {
+                    byId: {
+                        s1: {
+                            id: 's1',
+                            type: 1,
+                            mini: false,
+                            parentId: [], parentBaseId: null, parentTipId: null,
+                            objectIdBase: 'o1', objectIdTip: 'o1',
+                            base: { x: 10, y: 10, z: 0 },
+                            tip: { x: 10, y: 10, z: 3 },
+                            tipNormal: { x: 0, y: 0, z: -1 },
+                            settings: {
+                                base: { joinDiameter: 1.3 },
+                                tip: { pointDiameter: 0.5, diameter: 1.3, length: 1 },
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        const result = LysConverter.convert(SHORT_GROUNDED, createDefaultSettings());
+
+        assert.strictEqual(result.stumps?.length ?? 0, 1, 'A 3mm grounded tip is a stump');
+        assert.strictEqual(result.trunks.length, 0, 'It must not also become a trunk');
+        assert.strictEqual(result.roots.length, 0, 'A stump files no Roots row; its frustum is its root');
+
+        const stump = result.stumps![0];
+        assert.strictEqual(stump.rootPos.z, 0, 'The frustum stands on the plate');
+        assert.strictEqual(stump.segments.length, 0, 'The joint-to-cone span rides the cone, not a segment');
+        assert.strictEqual(stump.rootBaseDiameter, 2.0);
+        assert.strictEqual(stump.rootTopDiameter, 1.5);
+        assert.strictEqual(stump.rootHeight, 1.0);
+        assert.strictEqual(stump.joint.diameter, 1.5);
+        assert.strictEqual(stump.contactCone.socketJointId, stump.joint.id, 'The cone sockets into the joint');
+    });
+
+    it('should land a stump cone exactly on its frustum joint', () => {
+        // `segments` is empty, so an export walks nothing between joint and
+        // cone: a short cone would leave the contact floating.
+        const SHORT_GROUNDED: LysData = {
+            objects: { present: { byId: { o1: {
+                id: 'o1', formerCenter: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 0 },
+                rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+            } } } },
+            supports: { present: { byId: { s1: {
+                id: 's1', type: 1, mini: false,
+                parentId: [], parentBaseId: null, parentTipId: null,
+                objectIdBase: 'o1', objectIdTip: 'o1',
+                base: { x: 4, y: -2, z: 0 },
+                tip: { x: 4, y: -2, z: 4.2 },
+                tipNormal: { x: 0, y: 0, z: -1 },
+                settings: { base: { joinDiameter: 1.3 }, tip: { pointDiameter: 0.5, diameter: 1.3, length: 1 } },
+            } } } },
+        };
+
+        const stump = LysConverter.convert(SHORT_GROUNDED, createDefaultSettings()).stumps![0];
+        const socket = getFinalSocketPosition(stump.contactCone);
+        const gap = Math.hypot(
+            socket.x - stump.joint.pos.x,
+            socket.y - stump.joint.pos.y,
+            socket.z - stump.joint.pos.z,
+        );
+        assert.ok(gap < 1e-3, `cone socket must meet the joint; gap was ${gap.toFixed(4)}mm`);
+
+        // STUMP_BELOW_ROOT: nothing may dip below the frustum cap.
+        const lowest = Math.min(stump.contactCone.pos.z, socket.z);
+        assert.ok(lowest >= stump.joint.pos.z - 1e-3, 'no part of the stub may sit below the joint');
+        assert.strictEqual(stump.joint.pos.z, 1.1, 'The joint caps a 0.1 disk plus a 1.0 frustum');
+    });
+
+    it('should keep a short grounded support that carries children as a trunk', () => {
+        // A stump declares `edges: []` and can host nothing, so converting a
+        // support with children would silently drop them.
+        const SHORT_WITH_CHILD: LysData = {
+            objects: { present: { byId: { o1: {
+                id: 'o1', formerCenter: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 0 },
+                rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+            } } } },
+            supports: { present: { byId: {
+                s1: {
+                    id: 's1', type: 1, mini: false,
+                    parentId: [], parentBaseId: null, parentTipId: null,
+                    objectIdBase: 'o1', objectIdTip: 'o1',
+                    base: { x: 0, y: 0, z: 0 },
+                    tip: { x: 0, y: 0, z: 3 },
+                    tipNormal: { x: 0, y: 0, z: -1 },
+                    settings: { base: { joinDiameter: 1.3 }, tip: { pointDiameter: 0.5, diameter: 1.3, length: 1 } },
+                },
+                s2: {
+                    id: 's2', type: 1, mini: false,
+                    parentId: ['s1'], parentBaseId: 's1', parentTipId: null,
+                    objectIdBase: 'o1', objectIdTip: 'o1',
+                    base: { x: 0, y: 0, z: 1.5 },
+                    tip: { x: 6, y: 0, z: 9 },
+                    tipNormal: { x: 0, y: 0, z: -1 },
+                    settings: { base: { joinDiameter: 1.0 }, tip: { pointDiameter: 0.5, diameter: 1.0, length: 1 } },
+                },
+            } } },
+        };
+
+        const result = LysConverter.convert(SHORT_WITH_CHILD, createDefaultSettings());
+
+        assert.strictEqual(result.stumps?.length ?? 0, 0, 'A support with children stays a trunk');
+        assert.strictEqual(result.trunks.length, 1, 'It keeps the trunk that can host the child');
+        assert.strictEqual(result.roots.length, 1, 'And keeps its Roots row');
+    });
+
+    it('should keep a grounded support at or above the band as a trunk', () => {
+        const TALL_GROUNDED: LysData = {
+            objects: { present: { byId: { o1: {
+                id: 'o1', formerCenter: { x: 0, y: 0, z: 0 }, position: { x: 0, y: 0, z: 0 },
+                rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+            } } } },
+            supports: { present: { byId: { s1: {
+                id: 's1', type: 1, mini: false,
+                parentId: [], parentBaseId: null, parentTipId: null,
+                objectIdBase: 'o1', objectIdTip: 'o1',
+                base: { x: 0, y: 0, z: 0 },
+                // The band is half-open: 5.0 belongs to the trunk.
+                tip: { x: 0, y: 0, z: 5.0 },
+                tipNormal: { x: 0, y: 0, z: -1 },
+                settings: { base: { joinDiameter: 1.3 }, tip: { pointDiameter: 0.5, diameter: 1.3, length: 1 } },
+            } } } },
+        };
+
+        const result = LysConverter.convert(TALL_GROUNDED, createDefaultSettings());
+        assert.strictEqual(result.stumps?.length ?? 0, 0, '5.0mm is the trunk side of the band');
+        assert.strictEqual(result.trunks.length, 1);
     });
 
     it('should import a mini support as a twig regardless of its LYS type', () => {
