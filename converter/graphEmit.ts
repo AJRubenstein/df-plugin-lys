@@ -840,19 +840,22 @@ function emitKickstand(state: EmitState, node: LysNode): void {
   const attachEnd = resolveAttachEnd(node, record.skeleton, pA, pB);
   const attachPoint = attachEnd === 'base' ? pA : pB;
 
-  // The end that does not attach carries the root, in the same frame as the end
-  // that does: a rotated object puts the two tens of millimetres apart otherwise,
-  // and the column then rises beside its host instead of under it.
-  const rootEndpoint = attachEnd === 'base' ? pB : pA;
-  const rootBaseWorld = new THREE.Vector3(rootEndpoint.x, rootEndpoint.y, 0);
+  // The end that does not attach carries the root, and it stands on the plate, not
+  // on the model: a grounded end is authored in plate XY already, so it takes the
+  // object's position but not its rotation. Rotating it walks the foot off its grid
+  // node by however far the object leans.
+  const rootEndpoint = attachEnd === 'base' ? node.tip : node.base;
+  const rootBaseWorld = new THREE.Vector3(
+    rootEndpoint.x + frame.objectPosition.x,
+    rootEndpoint.y + frame.objectPosition.y,
+    0,
+  );
 
-  // A kickstand's own `joinLength` names its grid level, one lattice pitch below
-  // the level it braces, so it stops short. The end that attaches already carries
-  // the height the column has to reach -- the parent's `joinLength` less the plate
-  // drop resolves to exactly this point -- and taking it directly keeps the column
-  // vertical under its host instead of leaning across to meet it.
+  // A girder names its column height in plate-space `joinLength`; anything else
+  // rises to its own contact. The column stands straight to that height and the
+  // terminal segment leans from there to the host.
   const columnJoinLength = gridColumnHeightMm(node);
-  const columnTopZ = attachPoint.z;
+  const columnTopZ = columnJoinLength !== null ? columnJoinLength - frame.plateDropZ : attachPoint.z;
 
   const projection = projectOntoSkeleton(attachPoint, record.skeleton.segments);
   if (!projection) {
