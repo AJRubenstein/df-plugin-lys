@@ -3,104 +3,119 @@
  * conversion change can be diffed before/after. Ids are excluded because they
  * are regenerated every run; geometry and topology are what must match.
  *
- * Usage: node --import tsx plugins/lys-import/tools/snapshotLys.ts <file.lys> <out.json>
+ * Two modes, and they cover different code:
+ *
+ *  - default: convert with no mesh. This is the historical harness, and the mode
+ *    the checked-in baselines were captured in.
+ *  - `--mesh`: reproduce the file-type path instead — the object rotation with Z
+ *    stripped, plus the same ghost mesh that path builds. The contact-normal
+ *    raycast and the plate drop exist ONLY in this mode, so a regression there is
+ *    invisible without it.
+ *
+ * Usage: node --import tsx plugins/lys-import/tools/snapshotLys.ts <file.lys> <out.json> [--mesh]
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import * as THREE from 'three';
 import { LysParser } from '../LysParser';
 import { emitSupportGraph } from '../converter/graphEmit';
 import { createDefaultSettings } from '@/supports/Settings';
+import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
+import { snapshotOf, type FormatLike } from './snapshotFormat';
 
-const q = (n: number | undefined) => (typeof n === 'number' ? Math.round(n * 1000) / 1000 : null);
-const qp = (p: { x: number; y: number; z: number } | undefined) =>
-  p ? `${q(p.x)},${q(p.y)},${q(p.z)}` : null;
+interface Vec3Like { x: number; y: number; z: number }
+interface ObjectLike {
+  id?: string;
+  formerCenter?: Vec3Like;
+  center?: Vec3Like;
+  position?: Vec3Like;
+  rotation?: Vec3Like;
+  scale?: Vec3Like;
+}
+interface SceneLike {
+  objects?: { present?: { byId?: Record<string, ObjectLike> } };
+}
+interface ParsedScene {
+  sceneData: SceneLike;
+  geometry: THREE.BufferGeometry;
+  geometriesByName: Map<string, THREE.BufferGeometry>;
+}
 
-async function main() {
-  const [, , inPath, outPath] = process.argv;
-  if (!inPath || !outPath) throw new Error('usage: snapshotLys.ts <file.lys> <out.json>');
+/**
+ * The object rotation the file-type path converts with: Z is applied to the
+ * whole model afterwards instead of to each support, so the clone it hands the
+ * converter has Z zeroed.
+ */
+function withZStrippedRotation(scene: SceneLike): SceneLike {
+  const clone = JSON.parse(JSON.stringify(scene)) as SceneLike;
+  for (const obj of Object.values(clone.objects?.present?.byId ?? {})) {
+    const r = obj.rotation;
+    if (r) obj.rotation = { x: r.x, y: r.y, z: 0 };
+  }
+  return clone;
+}
+
+/**
+ * The ghost mesh the file-type path builds for an object: a group at the object's
+ * lift holding the geometry offset by `-pivot`. That offset is why a raycast has
+ * to be given points in this frame rather than in the payload's.
+ */
+function buildGhostMesh(parsed: ParsedScene, scene: SceneLike, objId: string): THREE.Mesh | undefined {
+  const obj = scene.objects?.present?.byId?.[objId];
+  if (!obj) return undefined;
+  const geometry = parsed.geometriesByName.get(objId) ?? parsed.geometry;
+  const center = obj.formerCenter ?? obj.center ?? { x: 0, y: 0, z: 0 };
+  const position = obj.position ?? { x: 0, y: 0, z: 0 };
+  const scale = obj.scale ?? { x: 1, y: 1, z: 1 };
+  const rotation = obj.rotation ?? { x: 0, y: 0, z: 0 };
+
+  const group = new THREE.Group();
+  group.position.set(0, 0, position.z);
+  group.scale.set(scale.x, scale.y, scale.z);
+  group.quaternion.copy(quaternionFromGlobalEulerDegrees(rotation));
+
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+  mesh.position.set(-center.x, -center.y, -center.z);
+  group.add(mesh);
+  group.updateMatrixWorld(true);
+  geometry.computeBoundingSphere();
+  return mesh;
+}
+
+async function main(): Promise<void> {
+  const [, , inPath, outPath, ...flags] = process.argv;
+  if (!inPath || !outPath) throw new Error('usage: snapshotLys.ts <file.lys> <out.json> [--mesh]');
+  const withMesh = flags.includes('--mesh');
 
   const buf = readFileSync(inPath);
-  const data: any = await LysParser.parse(new File([new Uint8Array(buf)], 'input.lys'));
+  // The parser's runtime payload is the scene object plus the geometry it decoded,
+  // which is what this tool reads; the plugin's own type describes a narrower view.
+  const parsed = (await LysParser.parse(new File([new Uint8Array(buf)], 'input.lys'))) as unknown as ParsedScene;
 
   const warnings: string[] = [];
   const origLog = console.log;
   const origWarn = console.warn;
   console.log = () => {};
   console.warn = (...a: unknown[]) => { warnings.push(a.join(' ')); };
-  let out: any;
+  let out: FormatLike;
   try {
-    out = emitSupportGraph(data.sceneData, createDefaultSettings() as any).format;
+    if (withMesh) {
+      const scene = withZStrippedRotation(parsed.sceneData);
+      const firstObjId = Object.keys(scene.objects?.present?.byId ?? {})[0] ?? '';
+      // One mesh, for the object the payload leads with: the file-type path builds
+      // one per object and converts per object, which this single-shot harness
+      // does not model. Multi-object files want a per-object run.
+      out = emitSupportGraph(scene, createDefaultSettings(), buildGhostMesh(parsed, scene, firstObjId)).format as unknown as FormatLike;
+    } else {
+      out = emitSupportGraph(parsed.sceneData, createDefaultSettings()).format as unknown as FormatLike;
+    }
   } finally {
     console.log = origLog;
     console.warn = origWarn;
   }
 
-  const knotById = new Map<string, any>((out.knots ?? []).map((k: any) => [k.id, k]));
-
-  // Shaft ids are generated per run, so name a segment by its own geometry.
-  const shaftSig = new Map<string, string>();
-  const addShafts = (entities: any[], kind: string) => {
-    for (const e of entities ?? []) {
-      for (const seg of e.segments ?? []) {
-        shaftSig.set(seg.id, `${kind}[${qp(seg.bottomJoint?.pos)}->${qp(seg.topJoint?.pos)}]`);
-      }
-    }
-  };
-  addShafts(out.trunks, 'trunk');
-  addShafts(out.branches, 'branch');
-  addShafts(out.twigs, 'twig');
-  addShafts(out.sticks, 'stick');
-  for (const kb of out.kickstands ?? []) addShafts([kb.kickstand], 'kickstand');
-
-  // Describe a knot by what it IS, not by its id.
-  const knotSig = (id: string | undefined) => {
-    if (!id) return null;
-    const k = knotById.get(id);
-    if (!k) return `DANGLING`;
-    const shaft = shaftSig.get(k.parentShaftId) ?? `UNRESOLVED-SHAFT`;
-    return `${shaft}@${q(k.t)}|${qp(k.pos)}|d=${q(k.diameter)}`;
-  };
-
-  // Braces keyed by their endpoint signatures — the thing that must not change.
-  const braces = (out.braces ?? [])
-    .map((b: any) => `${knotSig(b.startKnotId)} <-> ${knotSig(b.endKnotId)} | d=${q(b.profile?.diameter)}`)
-    .sort();
-
-  const knotSites = new Map<string, number>();
-  for (const k of out.knots ?? []) {
-    const key = `${shaftSig.get(k.parentShaftId) ?? 'UNRESOLVED'}|${qp(k.pos)}|d=${q(k.diameter)}`;
-    knotSites.set(key, (knotSites.get(key) ?? 0) + 1);
-  }
-
-  const referenced = new Set<string>();
-  for (const b of out.braces ?? []) { if (b.startKnotId) referenced.add(b.startKnotId); if (b.endKnotId) referenced.add(b.endKnotId); }
-  for (const b of out.branches ?? []) if (b.parentKnotId) referenced.add(b.parentKnotId);
-  for (const l of out.leaves ?? []) if (l.parentKnotId) referenced.add(l.parentKnotId);
-  for (const k of out.kickstands ?? []) if (k.hostKnot?.id) referenced.add(k.hostKnot.id);
-
-  const snapshot = {
-    counts: {
-      roots: out.roots?.length ?? 0,
-      trunks: out.trunks?.length ?? 0,
-      branches: out.branches?.length ?? 0,
-      leaves: out.leaves?.length ?? 0,
-      twigs: out.twigs?.length ?? 0,
-      sticks: out.sticks?.length ?? 0,
-      braces: out.braces?.length ?? 0,
-      kickstands: out.kickstands?.length ?? 0,
-      knots: out.knots?.length ?? 0,
-    },
-    knotIntegrity: {
-      distinctSites: knotSites.size,
-      duplicateKnots: [...knotSites.values()].reduce((a, b) => a + b - 1, 0),
-      danglingReferences: [...referenced].filter((id) => !knotById.has(id)).length,
-      orphanKnots: (out.knots ?? []).filter((k: any) => !referenced.has(k.id)).length,
-    },
-    warnings: warnings.map((w) => w.replace(/[0-9a-f-]{36}/g, '<id>')).sort(),
-    braces,
-  };
-
+  const snapshot = snapshotOf(out, warnings);
   writeFileSync(outPath, JSON.stringify(snapshot, null, 1));
-  console.log(`wrote ${outPath}`);
+  console.log(`wrote ${outPath}${withMesh ? ' (mesh mode)' : ''}`);
   console.log('counts:', JSON.stringify(snapshot.counts));
   console.log('knot integrity:', JSON.stringify(snapshot.knotIntegrity));
 }
