@@ -6,6 +6,7 @@ import type { SupportSettings } from '@/supports/Settings';
 import { getJointDiameter } from '@/supports/constants';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 import { recomputeLeafContactConeAxisAndLength } from '@/supports/state';
+import { buildKickstandData } from '@/supports/SupportTypes/Kickstand/kickstandBuilder';
 import { twigDiskJointStandoff } from '@/supports/SupportTypes/Twig/twigJointStandoff';
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '@/supports/SupportTypes/Twig/twigTaper';
 import { computeLowestZ } from '@/utils/geometry';
@@ -13,7 +14,7 @@ import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { createContactAssembly } from './contactAssembly';
 import { raycastSurfaceNormal } from './convertLysData';
 import { pickContactTipSettings, pickStickEndpointTipSettings, gridColumnHeightMm, inferLeafTipEndpoint, pickLeafEndpointDiameter } from './helpers';
-import { decideKnot, projectOntoSkeleton, type HostSkeleton } from './knotPolicy';
+import { decideKnot, parameterOnSegment, projectOntoSkeleton, type HostSegment, type HostSkeleton } from './knotPolicy';
 import type { LysData, LysObject, LysTipSettings } from './types';
 import { classifySupportGraph, hasUsableNormal, type ClassifyOptions, type SupportClass } from './graphClassify';
 import { buildSupportGraph, emissionOrder, type HostEnd, type LysNode } from './supportGraph';
@@ -127,6 +128,8 @@ interface EmitState {
   hosts: Map<string, HostRecord>;
   /** Ids referenced as a host by at least one node. */
   hasChildren: Set<string>;
+  /** Brace knots by site key, so two braces meeting at one point share a knot. */
+  braceKnots: Map<string, Knot>;
   mesh?: THREE.Mesh;
   diagnostics: EmitDiagnostics;
 }
@@ -134,6 +137,8 @@ interface EmitState {
 /** What a child needs from an already-emitted host: its skeleton, and its entity when a lookup needs it. */
 interface HostRecord {
   skeleton: HostSkeleton;
+  /** Shaft diameter per segment id — a kickstand sizes itself from its host shaft. */
+  segmentDiameter: Map<string, number>;
   twig?: Twig;
 }
 
@@ -205,7 +210,10 @@ function emitStick(state: EmitState, node: LysNode): void {
   };
   const stick: Stick = { id: uuidv4(), modelId: owner, segments: [segment], contactConeA, contactConeB };
   state.format.sticks = [...state.format.sticks, stick];
-  state.hosts.set(node.id, { skeleton: { kind: 'stick', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] } });
+  state.hosts.set(node.id, {
+    skeleton: { kind: 'stick', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] },
+    segmentDiameter: new Map([[segment.id, shaftDiameter]]),
+  });
   state.diagnostics.emitted.stick = (state.diagnostics.emitted.stick ?? 0) + 1;
 }
 
@@ -330,7 +338,11 @@ function emitTwig(state: EmitState, node: LysNode): void {
   state.format.twigs = [...state.format.twigs, twig];
   // A twig's skeleton is its JOINT line, not its disk centres: the runtime knot
   // host and the taper math both resolve through the joints.
-  state.hosts.set(node.id, { skeleton: { kind: 'twig', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] }, twig });
+  state.hosts.set(node.id, {
+    skeleton: { kind: 'twig', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] },
+    segmentDiameter: new Map([[segment.id, segment.diameter]]),
+    twig,
+  });
   state.diagnostics.emitted.twig = (state.diagnostics.emitted.twig ?? 0) + 1;
 }
 
@@ -420,8 +432,31 @@ function emitTrunk(state: EmitState, node: LysNode): void {
         { id: segments[1].id, start: joint0.pos, end: socketJoint.pos },
       ],
     },
+    segmentDiameter: new Map([[segments[0].id, pillarDiameter], [segments[1].id, pillarDiameter]]),
   });
   state.diagnostics.emitted.trunk = (state.diagnostics.emitted.trunk ?? 0) + 1;
+}
+
+/**
+ * Which of the two ends attaches to the host.
+ *
+ * The base end wins when both refs name one host — the order the old code reads
+ * them in — except when BOTH name the SAME host: its hint test then fails and it
+ * picks the end by normal, then by distance to the host.
+ */
+export function resolveAttachEnd(node: LysNode, host: HostSkeleton, pA: THREE.Vector3, pB: THREE.Vector3): HostEnd {
+  const bothRefsSameHost = !!node.hostBaseId && !!node.hostTipId && node.hostBaseId === node.hostTipId;
+  if (!bothRefsSameHost) return node.hostBaseId ? 'base' : 'tip';
+
+  const baseUsable = hasUsableNormal(node.baseNormal);
+  const tipUsable = hasUsableNormal(node.tipNormal);
+  if (baseUsable !== tipUsable) {
+    // The endpoint carrying a normal is the model contact, so the other end attaches.
+    return tipUsable ? 'base' : 'tip';
+  }
+  const distanceToHostA = projectOntoSkeleton(pA, host.segments)?.distanceMm ?? Number.POSITIVE_INFINITY;
+  const distanceToHostB = projectOntoSkeleton(pB, host.segments)?.distanceMm ?? Number.POSITIVE_INFINITY;
+  return distanceToHostA <= distanceToHostB ? 'base' : 'tip';
 }
 
 /**
@@ -448,23 +483,7 @@ function emitHosted(state: EmitState, node: LysNode): void {
   const frame = frameFor(state, owner);
   const pA = frame.transformPoint(node.base);
   const pB = frame.transformPoint(node.tip);
-  // The base end wins when both refs name one host — the order the old code reads
-  // them in — except when BOTH name the SAME host: its hint test then fails and it
-  // picks the end by normal, then by distance to the host.
-  const bothRefsSameHost = !!node.hostBaseId && !!node.hostTipId && node.hostBaseId === node.hostTipId;
-  let attachEnd: HostEnd = node.hostBaseId ? 'base' : 'tip';
-  if (bothRefsSameHost) {
-    const baseUsable = hasUsableNormal(node.baseNormal);
-    const tipUsable = hasUsableNormal(node.tipNormal);
-    if (baseUsable !== tipUsable) {
-      // The endpoint carrying a normal is the model contact, so the other end attaches.
-      attachEnd = tipUsable ? 'base' : 'tip';
-    } else {
-      const distanceToHostA = projectOntoSkeleton(pA, record.skeleton.segments)?.distanceMm ?? Number.POSITIVE_INFINITY;
-      const distanceToHostB = projectOntoSkeleton(pB, record.skeleton.segments)?.distanceMm ?? Number.POSITIVE_INFINITY;
-      attachEnd = distanceToHostA <= distanceToHostB ? 'base' : 'tip';
-    }
-  }
+  const attachEnd = resolveAttachEnd(node, record.skeleton, pA, pB);
   const attachPoint = attachEnd === 'base' ? pA : pB;
   const contactPoint = attachEnd === 'base' ? pB : pA;
 
@@ -574,8 +593,210 @@ function emitHosted(state: EmitState, node: LysNode): void {
         return { id: seg.id, start, end };
       }),
     },
+    segmentDiameter: new Map(segments.map((seg) => [seg.id, seg.diameter ?? shaftDiameter])),
   });
   state.diagnostics.emitted.branch = (state.diagnostics.emitted.branch ?? 0) + 1;
+}
+
+/**
+ * The host projection a brace uses: not simply the nearest point. A brace
+ * endpoint that clamps to a segment's very end is usually a mis-binding, so
+ * candidates are penalised for being at an end and for being far from the height
+ * their position along the host's own axis implies.
+ */
+function projectBracePoint(host: HostSkeleton, point: THREE.Vector3): { parentShaftId: string; t: number; pointOnLine: Vec3; segment: HostSegment } | null {
+  const segments = host.segments;
+  if (segments.length === 0) return null;
+
+  const axisStart = segments[0].start;
+  const axisEnd = segments[segments.length - 1].end;
+  const ax = axisEnd.x - axisStart.x;
+  const ay = axisEnd.y - axisStart.y;
+  const az = axisEnd.z - axisStart.z;
+  const axisLenSq = ax * ax + ay * ay + az * az;
+  const axisAlpha = axisLenSq > 1e-8
+    ? Math.min(1, Math.max(0, ((point.x - axisStart.x) * ax + (point.y - axisStart.y) * ay + (point.z - axisStart.z) * az) / axisLenSq))
+    : 0;
+  const desiredIndex = axisAlpha * (segments.length - 1);
+
+  let best: { id: string; t: number; pointOnLine: Vec3; score: number; segment: HostSegment } | null = null;
+  for (let i = 0; i < segments.length; i++) {
+    const projection = projectOntoSkeleton(point, [segments[i]]);
+    if (!projection) continue;
+    const isEndpoint = projection.t <= 0.02 || projection.t >= 0.98;
+    const endpointPenalty = isEndpoint ? Math.max(0, projection.distanceMm - 0.35) * 4 + 0.75 : 0;
+    const indexPenalty = Math.abs(i - desiredIndex) * 0.25;
+    const score = projection.distanceMm + endpointPenalty + indexPenalty;
+    if (!best || score < best.score) {
+      best = { id: projection.segmentId, t: projection.t, pointOnLine: projection.point, score, segment: segments[i] };
+    }
+  }
+  if (!best) return null;
+  return { parentShaftId: best.id, t: best.t, pointOnLine: best.pointOnLine, segment: best.segment };
+}
+
+/**
+ * A member spanning two hosts: one knot on each, positioned at the AUTHORED
+ * endpoints rather than at the projection (projecting both ends squashes a brace
+ * whenever a host clamps near a segment boundary). The projections are still what
+ * name the shaft and parameter each knot rides.
+ *
+ * The graph gives the pairing outright — `parentBaseId` names the base end's host
+ * and `parentTipId` the tip end's — so the old code's candidate scoring exists
+ * only for refs that no longer resolve, which never reach here.
+ */
+function emitBrace(state: EmitState, node: LysNode): void {
+  const hostBaseId = node.hostBaseId;
+  const hostTipId = node.hostTipId;
+  const hostA = hostBaseId ? state.hosts.get(hostBaseId) : undefined;
+  const hostB = hostTipId ? state.hosts.get(hostTipId) : undefined;
+  if (!hostA || !hostB) {
+    state.diagnostics.skipped.push(`${node.id}: brace host ${!hostA ? hostBaseId : hostTipId} was not emitted`);
+    return;
+  }
+
+  const owner = ownerOf(state, node);
+  const frame = frameFor(state, owner);
+  const pA = frame.transformPoint(node.base);
+  const pB = frame.transformPoint(node.tip);
+  const projA = projectBracePoint(hostA.skeleton, pA);
+  const projB = projectBracePoint(hostB.skeleton, pB);
+  if (!projA || !projB) {
+    state.diagnostics.skipped.push(`${node.id}: brace host published no skeleton`);
+    return;
+  }
+
+  const tipDiameter = node.settings?.tip?.diameter;
+  const baseTipDiameter = node.settings?.baseTip?.diameter;
+  const joinDiameter = node.settings?.base?.joinDiameter;
+  const positive = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+  const braceDiameter = positive(tipDiameter) ?? positive(baseTipDiameter) ?? positive(joinDiameter) ?? 0.5;
+  const braceJointDiameter = getJointDiameter(braceDiameter);
+
+  // A knot on a tapered twig is sized by the twig's local diameter, not by one
+  // shared brace diameter: on a tapered host the two ends genuinely differ.
+  const knotDiameterForHost = (host: HostSkeleton, twig: Twig | undefined, shafts: { parentShaftId: string; t: number }): number => {
+    if (host.kind !== 'twig' || !twig) return braceJointDiameter;
+    const local = resolveTwigDiameterAtSegmentT(twig, shafts.parentShaftId, shafts.t);
+    return local !== null && local > 0 ? twigJointDiameterForLocalDiameter(local) : braceJointDiameter;
+  };
+
+  const knotA = braceKnot(state, projA.parentShaftId, parameterOnSegment(pA, projA.segment), pA, knotDiameterForHost(hostA.skeleton, hostA.twig, projA));
+  const knotB = braceKnot(state, projB.parentShaftId, parameterOnSegment(pB, projB.segment), pB, knotDiameterForHost(hostB.skeleton, hostB.twig, projB));
+
+  const brace: Brace = {
+    id: uuidv4(),
+    modelId: owner,
+    startKnotId: knotA.id,
+    endKnotId: knotB.id,
+    profile: { diameter: braceDiameter },
+  };
+  state.format.braces = [...state.format.braces, brace];
+  state.diagnostics.emitted.brace = (state.diagnostics.emitted.brace ?? 0) + 1;
+}
+
+/**
+ * Endpoints agreeing on shaft, position and diameter are one attachment point —
+ * the identity the old code keyed on and, in crys, failed to dedupe. Diameter is
+ * part of the key because a tapered host gives two endpoints at one site
+ * different diameters.
+ */
+function braceKnot(state: EmitState, parentShaftId: string, t: number, pos: Vec3, diameter: number): Knot {
+  const round = (v: number) => Math.round(v * 1000) / 1000;
+  const key = `${parentShaftId}|${round(pos.x)},${round(pos.y)},${round(pos.z)}|${round(diameter)}`;
+  const existing = state.braceKnots.get(key);
+  if (existing) return existing;
+
+  const knot: Knot = { id: uuidv4(), parentShaftId, t, pos: { ...pos }, diameter, _importHint: 'braceImported' };
+  state.braceKnots.set(key, knot);
+  state.format.knots = [...state.format.knots, knot];
+  return knot;
+}
+
+/**
+ * A grounded column bracing a shaft: its root stands on the plate at the end that
+ * does NOT attach, and its column rises to the host it leans on.
+ *
+ * Kickstands attach to trunk and branch shafts only — a twig or stick host is not
+ * a shaft this contract fits, and a kickstand cannot host another.
+ */
+function emitKickstand(state: EmitState, node: LysNode): void {
+  const hostId = node.hostBaseId ?? node.hostTipId;
+  const record = hostId ? state.hosts.get(hostId) : undefined;
+  if (!hostId || !record) {
+    state.diagnostics.skipped.push(`${node.id}: kickstand host ${hostId ?? '(none)'} was not emitted`);
+    return;
+  }
+  const hostKind = record.skeleton.kind;
+  if (hostKind === 'twig' || hostKind === 'stick' || hostKind === 'kickstand') {
+    state.diagnostics.skipped.push(`${node.id}: kickstand cannot attach to a ${hostKind} host`);
+    return;
+  }
+
+  const owner = ownerOf(state, node);
+  const frame = frameFor(state, owner);
+  const pA = frame.transformPoint(node.base);
+  const pB = frame.transformPoint(node.tip);
+  const attachEnd = resolveAttachEnd(node, record.skeleton, pA, pB);
+  const attachPoint = attachEnd === 'base' ? pA : pB;
+
+  // The end that does not attach carries the root, and it takes the object's own
+  // XY without going through the object transform.
+  const rootEndpoint = attachEnd === 'base' ? node.tip : node.base;
+  const rootBaseWorld = new THREE.Vector3(
+    rootEndpoint.x + frame.objectPosition.x,
+    rootEndpoint.y + frame.objectPosition.y,
+    0,
+  );
+
+  // A girder names its column height in plate-space `joinLength`; anything else
+  // rises to its own contact.
+  const columnJoinLength = gridColumnHeightMm(node);
+  const columnTopZ = columnJoinLength !== null ? columnJoinLength - frame.plateDropZ : attachPoint.z;
+
+  const projection = projectOntoSkeleton(attachPoint, record.skeleton.segments);
+  if (!projection) {
+    state.diagnostics.skipped.push(`${node.id}: host ${hostId} published no skeleton`);
+    return;
+  }
+  const hostDiameterMm = record.segmentDiameter.get(projection.segmentId) ?? state.settings.shaft.diameterMm;
+
+  const build = buildKickstandData({
+    modelId: owner,
+    // The plate sits a drop below the space the shaft is built in.
+    rootPos: { x: rootBaseWorld.x, y: rootBaseWorld.y, z: rootBaseWorld.z - frame.plateDropZ },
+    host: {
+      segmentId: projection.segmentId,
+      supportKind: hostKind,
+      t: Math.min(1, Math.max(0, projection.t)),
+      pos: projection.point,
+      diameterMm: hostDiameterMm,
+      minT: 0,
+    },
+    ...(columnJoinLength !== null
+      ? { authoredColumn: { topPos: { x: rootBaseWorld.x, y: rootBaseWorld.y, z: columnTopZ } } }
+      : {}),
+  });
+
+  state.format.kickstands = [...state.format.kickstands, build];
+
+  // Publish, so a brace can attach to the column — girder members do.
+  let cursor: Vec3 = {
+    x: build.root.transform.pos.x,
+    y: build.root.transform.pos.y,
+    z: build.root.transform.pos.z + build.root.diskHeight + build.root.coneHeight,
+  };
+  const segments: HostSegment[] = build.kickstand.segments.map((seg) => {
+    const start = cursor;
+    const end = seg.topJoint?.pos ?? build.hostKnot.pos;
+    cursor = end;
+    return { id: seg.id, start, end };
+  });
+  state.hosts.set(node.id, {
+    skeleton: { kind: 'kickstand', segments },
+    segmentDiameter: new Map(build.kickstand.segments.map((seg) => [seg.id, seg.diameter ?? state.settings.shaft.diameterMm])),
+  });
+  state.diagnostics.emitted.kickstand = (state.diagnostics.emitted.kickstand ?? 0) + 1;
 }
 
 const EMITTERS: Partial<Record<SupportClass, (state: EmitState, node: LysNode) => void>> = {
@@ -584,6 +805,8 @@ const EMITTERS: Partial<Record<SupportClass, (state: EmitState, node: LysNode) =
   trunk: emitTrunk,
   branch: emitHosted,
   leaf: emitHosted,
+  brace: emitBrace,
+  kickstand: emitKickstand,
 };
 
 export function emitSupportGraph(
@@ -610,6 +833,7 @@ export function emitSupportGraph(
     frames: new Map(),
     hosts: new Map(),
     hasChildren: new Set(graph.hostEdges.map((edge) => edge.hostId)),
+    braceKnots: new Map(),
     mesh,
     diagnostics,
   };

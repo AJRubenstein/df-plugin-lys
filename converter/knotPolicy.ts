@@ -25,7 +25,7 @@ export interface HostSegment {
 }
 
 export interface HostSkeleton {
-  kind: 'trunk' | 'branch' | 'twig' | 'stick';
+  kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand';
   segments: HostSegment[];
 }
 
@@ -98,7 +98,7 @@ export function projectOntoSkeleton(point: Vec3, segments: HostSegment[]): Proje
 }
 
 /** Parameter of a point on one segment, along the skeleton's own axis direction. */
-function parameterOn(point: Vec3, segment: HostSegment): number {
+export function parameterOnSegment(point: Vec3, segment: HostSegment): number {
   const dx = segment.end.x - segment.start.x;
   const dy = segment.end.y - segment.start.y;
   const dz = segment.end.z - segment.start.z;
@@ -155,7 +155,7 @@ export function decideKnot(input: KnotInput): KnotDecision | null {
     chose = 'projected';
   }
 
-  const t = parameterOn(pos, hostSegment);
+  const t = parameterOnSegment(pos, hostSegment);
   return {
     parentShaftId: projection.segmentId,
     t,

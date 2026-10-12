@@ -193,22 +193,97 @@ describe('graphEmit — trunk', () => {
   });
 });
 
-describe('graphEmit — pending classes', () => {
-  it('names a class present in the graph that the pass does not build yet', () => {
-    // A member spanning two hosts: a brace, which is still pending.
+describe('graphEmit — brace and kickstand', () => {
+  const twoTrunks = {
+    hostA: support({ id: 'hostA', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
+    hostB: support({ id: 'hostB', objectIdTip: 'o1', base: { x: 10, y: 0, z: 0.1 }, tip: { x: 10, y: 0, z: 30 } }),
+  };
+
+  it('spans two hosts and shares one knot where two braces meet', () => {
     const { format, diagnostics } = emitSupportGraph(
       sceneOf({
-        hostA: support({ id: 'hostA', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
-        hostB: support({ id: 'hostB', objectIdTip: 'o1', base: { x: 10, y: 0, z: 0.1 }, tip: { x: 10, y: 0, z: 30 } }),
-        span: support({ id: 'span', objectIdTip: 'o1', parentBaseId: 'hostA', parentTipId: 'hostB', base: { x: 0, y: 0, z: 10 }, tip: { x: 10, y: 0, z: 10 } }),
+        ...twoTrunks,
+        // Both braces start at the same point on hostA.
+        span1: support({ id: 'span1', objectIdTip: 'o1', parentBaseId: 'hostA', parentTipId: 'hostB', base: { x: 0, y: 0, z: 10 }, tip: { x: 10, y: 0, z: 10 } }),
+        span2: support({ id: 'span2', objectIdTip: 'o1', parentBaseId: 'hostA', parentTipId: 'hostB', base: { x: 0, y: 0, z: 10 }, tip: { x: 10, y: 0, z: 20 } }),
       }),
       settings as never,
     );
 
-    assert.deepEqual(diagnostics.notYetWired, ['brace']);
-    assert.equal(format.braces.length, 0);
-    // Both hosts are still emitted, so the pending class does not take them with it.
+    assert.deepEqual(diagnostics.notYetWired, []);
+    assert.equal(format.braces.length, 2);
+    // Four endpoints, but the two base ends are one site: three knots.
+    assert.equal(format.knots.length, 3);
+    assert.equal(format.braces[0].startKnotId, format.braces[1].startKnotId);
+    assert.notEqual(format.braces[0].endKnotId, format.braces[1].endKnotId);
+    // The knots sit at the authored endpoints, not at a projection.
+    assert.deepEqual(format.knots.find((k) => k.id === format.braces[0].startKnotId)?.pos, { x: 0, y: 0, z: 10 });
+    assert.equal(format.knots.find((k) => k.id === format.braces[0].startKnotId)?._importHint, 'braceImported');
+  });
+
+  it('roots a kickstand at the end that does not attach, and publishes it as a host', () => {
+    const { format, diagnostics } = emitSupportGraph(
+      sceneOf({
+        host: support({ id: 'host', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
+        // Base on the plate, tip attaching to the host shaft: a grounded column.
+        column: support({ id: 'column', objectIdTip: 'o1', parentTipId: 'host', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 20 } }),
+        // A brace onto the kickstand: girder members attach that way.
+        span: support({ id: 'span', objectIdTip: 'o1', parentBaseId: 'column', parentTipId: 'host', base: { x: 0, y: 0, z: 22 }, tip: { x: 0, y: 0, z: 15 } }),
+      }),
+      settings as never,
+    );
+
+    assert.deepEqual(diagnostics.notYetWired, []);
+    assert.equal(format.kickstands.length, 1);
+    // The root is the base end, which is the grounded one.
+    assert.equal(format.kickstands[0].root.transform.pos.z, 0);
+    assert.equal(format.kickstands[0].root.transform.pos.y, 0);
+    assert.equal(format.braces.length, 1);
+  });
+
+  it('refuses a kickstand whose host is a twig, naming the reason', () => {
+    const { format, diagnostics } = emitSupportGraph(
+      sceneOf({
+        twigHost: floating({ id: 'twigHost', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 14 } }),
+        column: support({ id: 'column', objectIdTip: 'o1', parentTipId: 'twigHost', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 13 } }),
+      }),
+      settings as never,
+    );
+
+    assert.equal(format.kickstands.length, 0);
+    assert.match(diagnostics.skipped.join(' '), /column: kickstand cannot attach to a twig host/);
+  });
+});
+
+describe('graphEmit — completeness', () => {
+  it('builds every class the graph can hold, with nothing left pending', () => {
+    const { format, diagnostics } = emitSupportGraph(
+      sceneOf({
+        // trunk -------------------------
+        trunkA: support({ id: 'trunkA', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
+        trunkB: support({ id: 'trunkB', objectIdTip: 'o1', base: { x: 10, y: 0, z: 0.1 }, tip: { x: 10, y: 0, z: 30 } }),
+        // branch, leaf, kickstand, brace --------
+        branch: support({ id: 'branch', objectIdTip: 'o1', parentBaseId: 'trunkA', base: { x: 0, y: 0, z: 10 }, tip: { x: 0, y: 0, z: 20 }, settings: { tip: { length: 2 } } }),
+        leaf: support({ id: 'leaf', objectIdTip: 'o1', parentBaseId: 'trunkA', base: { x: 0, y: 0, z: 12 }, tip: { x: 0, y: 0, z: 14 }, settings: { tip: { length: 2 } } }),
+        column: support({ id: 'column', objectIdTip: 'o1', parentTipId: 'trunkA', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 18 } }),
+        span: support({ id: 'span', objectIdTip: 'o1', parentBaseId: 'trunkA', parentTipId: 'trunkB', base: { x: 0, y: 0, z: 20 }, tip: { x: 10, y: 0, z: 20 } }),
+        // twig, stick ---------------------------
+        twig: floating({ id: 'twig', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 14 } }),
+        stick: floating({ id: 'stick', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 40 } }),
+      }),
+      settings as never,
+    );
+
+    assert.deepEqual(diagnostics.notYetWired, []);
+    assert.deepEqual(diagnostics.skipped, []);
     assert.equal(format.trunks.length, 2);
+    assert.equal(format.roots.length, 2);
+    assert.equal(format.branches.length, 1);
+    assert.equal(format.leaves.length, 1);
+    assert.equal(format.braces.length, 1);
+    assert.equal(format.kickstands.length, 1);
+    assert.equal(format.twigs.length, 1);
+    assert.equal(format.sticks.length, 1);
   });
 
   it('reports a scene with no objects rather than inventing an owner', () => {
