@@ -13,8 +13,8 @@ const trunkHost: HostSkeleton = {
 
 const knot = (over: Partial<Parameters<typeof decideKnot>[0]> = {}) => decideKnot({
   attachPoint: { x: 0.2, y: 0, z: 10 },
-  authoredBase: { x: 0.2, y: 0, z: 10 },
-  authoredTip: { x: 0, y: 0, z: 20 },
+  sourceTipMinusBaseZ: 10,
+  contactPoint: { x: 0, y: 0, z: 20 },
   host: trunkHost,
   usedExplicitParentHint: true,
   isLikelyLeafLike: false,
@@ -90,8 +90,8 @@ describe('knotPolicy — position', () => {
   it('flips to the authored point when the projection lands past the tip of the child', () => {
     const decision = knot({
       attachPoint: { x: 5, y: 0, z: 25 },
-      authoredBase: { x: 0, y: 0, z: 1 },
-      authoredTip: { x: 0, y: 0, z: 20 },
+      sourceTipMinusBaseZ: 19,
+      contactPoint: { x: 0, y: 0, z: 20 },
     });
 
     assert.ok(decision);

@@ -32,9 +32,14 @@ export interface HostSkeleton {
 export interface KnotInput {
   /** The child's authored attach endpoint, already in the converter's frame. */
   attachPoint: Vec3;
-  /** The child's own two endpoints, for the endpoint-ordering fallback. */
-  authoredBase: Vec3;
-  authoredTip: Vec3;
+  /**
+   * `tip.z - base.z` in the SOURCE frame, or null when either is unusable. The
+   * ordering test reads the source frame (the old code does), because that is
+   * what says which way the author pointed the support.
+   */
+  sourceTipMinusBaseZ: number | null;
+  /** The child's contact endpoint, in the converter's frame. */
+  contactPoint: Vec3;
   host: HostSkeleton;
   /** True when an end ref (`parentBaseId`/`parentTipId`) named this host. */
   usedExplicitParentHint: boolean;
@@ -46,6 +51,8 @@ export interface KnotDecision {
   parentShaftId: string;
   /** Unclamped parameter of `pos` along its host segment. */
   t: number;
+  /** The same parameter clamped to the segment — what the old code reported. */
+  tClamped: number;
   pos: Vec3;
   chose: 'authored' | 'projected';
   /** Perpendicular distance from the authored point to the host skeleton. */
@@ -59,7 +66,7 @@ const ON_HOST_TOLERANCE_MM = 0.5;
 /** Where a parameter counts as pinned to a segment end. */
 const ENDPOINT_T = 0.02;
 
-interface Projection {
+export interface Projection {
   segmentIndex: number;
   segmentId: string;
   /** Closest point on the skeleton. */
@@ -69,7 +76,7 @@ interface Projection {
   distanceMm: number;
 }
 
-function projectOntoSkeleton(point: Vec3, segments: HostSegment[]): Projection | null {
+export function projectOntoSkeleton(point: Vec3, segments: HostSegment[]): Projection | null {
   let best: Projection | null = null;
   for (let i = 0; i < segments.length; i++) {
     const { id, start, end } = segments[i];
@@ -101,7 +108,7 @@ function parameterOn(point: Vec3, segment: HostSegment): number {
 }
 
 export function decideKnot(input: KnotInput): KnotDecision | null {
-  const { attachPoint, authoredBase, authoredTip, host, usedExplicitParentHint, isLikelyLeafLike } = input;
+  const { attachPoint, sourceTipMinusBaseZ, contactPoint, host, usedExplicitParentHint, isLikelyLeafLike } = input;
   const projection = projectOntoSkeleton(attachPoint, host.segments);
   if (!projection) return null;
   const hostSegment = host.segments[projection.segmentIndex];
@@ -134,9 +141,8 @@ export function decideKnot(input: KnotInput): KnotDecision | null {
   // Endpoint ordering: projection can put the knot on the far side of the child's
   // own tip, which flips it to point the wrong way. The authored point never does.
   if (usedExplicitParentHint && (preserve || !(pinnedToTip || pinnedToBase))) {
-    const sourceTipMinusBase = authoredTip.z - authoredBase.z;
-    const importedTipMinusKnot = authoredTip.z - pos.z;
-    if (Math.abs(sourceTipMinusBase) > 1e-4 && sourceTipMinusBase * importedTipMinusKnot < 0) {
+    const importedTipMinusKnot = contactPoint.z - pos.z;
+    if (sourceTipMinusBaseZ !== null && Math.abs(sourceTipMinusBaseZ) > 1e-4 && sourceTipMinusBaseZ * importedTipMinusKnot < 0) {
       pos = attachPoint;
       chose = 'authored';
     }
@@ -153,6 +159,7 @@ export function decideKnot(input: KnotInput): KnotDecision | null {
   return {
     parentShaftId: projection.segmentId,
     t,
+    tClamped: Math.min(1, Math.max(0, t)),
     pos,
     chose,
     deltaMm,

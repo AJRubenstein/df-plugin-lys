@@ -1,19 +1,22 @@
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
-import type { DragonfruitImportFormat, Joint, Roots, Segment, Stick, Trunk, Twig, Vec3 } from '@/supports/types';
+import type { Branch, DragonfruitImportFormat, Joint, Knot, Leaf, Roots, Segment, Stick, Trunk, Twig, Vec3 } from '@/supports/types';
 import type { ContactDiskProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportSettings } from '@/supports/Settings';
 import { getJointDiameter } from '@/supports/constants';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
+import { recomputeLeafContactConeAxisAndLength } from '@/supports/state';
 import { twigDiskJointStandoff } from '@/supports/SupportTypes/Twig/twigJointStandoff';
-import { twigJointDiameterForLocalDiameter } from '@/supports/SupportTypes/Twig/twigTaper';
+import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '@/supports/SupportTypes/Twig/twigTaper';
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { createContactAssembly } from './contactAssembly';
 import { raycastSurfaceNormal } from './convertLysData';
-import { pickContactTipSettings, pickStickEndpointTipSettings } from './helpers';
+import { pickContactTipSettings, pickStickEndpointTipSettings, gridColumnHeightMm, inferLeafTipEndpoint, pickLeafEndpointDiameter } from './helpers';
+import { decideKnot, projectOntoSkeleton, type HostSkeleton } from './knotPolicy';
 import type { LysData, LysObject, LysTipSettings } from './types';
-import { classifySupportGraph, type ClassifyOptions, type SupportClass } from './graphClassify';
-import { buildSupportGraph, emissionOrder, type LysNode } from './supportGraph';
+import { classifySupportGraph, hasUsableNormal, type ClassifyOptions, type SupportClass } from './graphClassify';
+import { buildSupportGraph, emissionOrder, type HostEnd, type LysNode } from './supportGraph';
 
 /**
  * The emit pass: one walk of the graph in host-before-child order, each node
@@ -120,8 +123,18 @@ interface EmitState {
   settings: SupportSettings;
   objects: Record<string, LysObject>;
   frames: Map<string, ObjectFrame>;
+  /** Published skeletons, keyed by the LYS support id that owns them. */
+  hosts: Map<string, HostRecord>;
+  /** Ids referenced as a host by at least one node. */
+  hasChildren: Set<string>;
   mesh?: THREE.Mesh;
   diagnostics: EmitDiagnostics;
+}
+
+/** What a child needs from an already-emitted host: its skeleton, and its entity when a lookup needs it. */
+interface HostRecord {
+  skeleton: HostSkeleton;
+  twig?: Twig;
 }
 
 /**
@@ -192,6 +205,7 @@ function emitStick(state: EmitState, node: LysNode): void {
   };
   const stick: Stick = { id: uuidv4(), modelId: owner, segments: [segment], contactConeA, contactConeB };
   state.format.sticks = [...state.format.sticks, stick];
+  state.hosts.set(node.id, { skeleton: { kind: 'stick', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] } });
   state.diagnostics.emitted.stick = (state.diagnostics.emitted.stick ?? 0) + 1;
 }
 
@@ -314,6 +328,9 @@ function emitTwig(state: EmitState, node: LysNode): void {
     },
   };
   state.format.twigs = [...state.format.twigs, twig];
+  // A twig's skeleton is its JOINT line, not its disk centres: the runtime knot
+  // host and the taper math both resolve through the joints.
+  state.hosts.set(node.id, { skeleton: { kind: 'twig', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] }, twig });
   state.diagnostics.emitted.twig = (state.diagnostics.emitted.twig ?? 0) + 1;
 }
 
@@ -393,13 +410,180 @@ function emitTrunk(state: EmitState, node: LysNode): void {
 
   state.format.roots = [...state.format.roots, root];
   state.format.trunks = [...state.format.trunks, trunk];
+  // The trunk's skeleton starts at the ROOT TOP, not at the authored base: the
+  // root's collar occupies the span between them.
+  state.hosts.set(node.id, {
+    skeleton: {
+      kind: 'trunk',
+      segments: [
+        { id: segments[0].id, start: { x: root.transform.pos.x, y: root.transform.pos.y, z: root.transform.pos.z + diskHeight + coneHeight }, end: joint0.pos },
+        { id: segments[1].id, start: joint0.pos, end: socketJoint.pos },
+      ],
+    },
+  });
   state.diagnostics.emitted.trunk = (state.diagnostics.emitted.trunk ?? 0) + 1;
+}
+
+/**
+ * A hosted support: a knot on its host's shaft, and then either a branch below it
+ * or — when the shaft turns out to be nothing but cone — a leaf at it.
+ *
+ * Which of the two is settled HERE, after the knot exists, because the shaft
+ * length is measured from the knot the policy chose. That is the one decision that
+ * spans classify and emit.
+ */
+function emitHosted(state: EmitState, node: LysNode): void {
+  const hostId = node.hostBaseId ?? node.hostTipId;
+  if (!hostId) {
+    state.diagnostics.skipped.push(`${node.id}: hosted with no host ref`);
+    return;
+  }
+  const record = state.hosts.get(hostId);
+  if (!record) {
+    state.diagnostics.skipped.push(`${node.id}: host ${hostId} was not emitted`);
+    return;
+  }
+
+  const owner = ownerOf(state, node);
+  const frame = frameFor(state, owner);
+  const pA = frame.transformPoint(node.base);
+  const pB = frame.transformPoint(node.tip);
+  // The base end wins when both refs name one host — the order the old code reads
+  // them in — except when BOTH name the SAME host: its hint test then fails and it
+  // picks the end by normal, then by distance to the host.
+  const bothRefsSameHost = !!node.hostBaseId && !!node.hostTipId && node.hostBaseId === node.hostTipId;
+  let attachEnd: HostEnd = node.hostBaseId ? 'base' : 'tip';
+  if (bothRefsSameHost) {
+    const baseUsable = hasUsableNormal(node.baseNormal);
+    const tipUsable = hasUsableNormal(node.tipNormal);
+    if (baseUsable !== tipUsable) {
+      // The endpoint carrying a normal is the model contact, so the other end attaches.
+      attachEnd = tipUsable ? 'base' : 'tip';
+    } else {
+      const distanceToHostA = projectOntoSkeleton(pA, record.skeleton.segments)?.distanceMm ?? Number.POSITIVE_INFINITY;
+      const distanceToHostB = projectOntoSkeleton(pB, record.skeleton.segments)?.distanceMm ?? Number.POSITIVE_INFINITY;
+      attachEnd = distanceToHostA <= distanceToHostB ? 'base' : 'tip';
+    }
+  }
+  const attachPoint = attachEnd === 'base' ? pA : pB;
+  const contactPoint = attachEnd === 'base' ? pB : pA;
+
+  const tipSettings = pickContactTipSettings(node);
+  const tipLen = tipSettings?.length || state.settings.tip.lengthMm;
+  const isLikelyLeafLike = node.mini || attachPoint.distanceTo(contactPoint) - tipLen <= 0.2;
+  const usedExplicitParentHint = !(node.hostBaseId && node.hostTipId && node.hostBaseId === node.hostTipId);
+  const sourceTipMinusBaseZ = Number.isFinite(node.tip.z) && Number.isFinite(node.base.z)
+    ? node.tip.z - node.base.z
+    : null;
+
+  const decision = decideKnot({
+    attachPoint,
+    sourceTipMinusBaseZ,
+    contactPoint,
+    host: record.skeleton,
+    usedExplicitParentHint,
+    isLikelyLeafLike,
+  });
+  if (!decision) {
+    state.diagnostics.skipped.push(`${node.id}: host ${hostId} published no skeleton`);
+    return;
+  }
+
+  const knotImportHint: NonNullable<Knot['_importHint']> = decision.chose === 'authored' ? 'preserve' : 'project';
+  const knot: Knot = {
+    id: uuidv4(),
+    parentShaftId: decision.parentShaftId,
+    t: decision.t,
+    pos: decision.pos,
+    _importHint: knotImportHint,
+  };
+  state.format.knots = [...state.format.knots, knot];
+
+  const shaftLength = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z).distanceTo(contactPoint) - tipLen;
+  const isLeaf = (node.mini || shaftLength <= 0.2) && !state.hasChildren.has(node.id);
+  const shaftDiameter = node.settings?.base?.joinDiameter
+    || tipSettings?.diameter
+    || state.settings.shaft.diameterMm;
+  const transformedTipNormal = node.tipNormal ? frame.transformNormal(node.tipNormal) : null;
+
+  const { socketJoint, contactCone } = createContactAssembly(
+    node, contactPoint, knot.pos, tipSettings, state.settings.tip, frame.mesh, true, true, transformedTipNormal, true,
+    // A leaf is all cone, with no shaft to take a width from.
+    isLeaf ? undefined : shaftDiameter,
+  );
+
+  if (isLeaf) {
+    socketJoint.pos = knot.pos;
+    // Aim and length the cone with the canonical routine the load path and the
+    // live drag preview use, so the import does not snap on first drag. The model
+    // contact is held fixed: only the knot-side angle and length change.
+    const leafSurfaceNormal = contactCone.surfaceNormal ?? contactCone.normal;
+    const { axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
+      contactCone.pos, leafSurfaceNormal, knot.pos, contactCone.profile,
+    );
+    contactCone.normal = axis;
+    contactCone.profile.lengthMm = lengthMm;
+
+    const tipEndpoint = inferLeafTipEndpoint(contactPoint, pA, pB);
+    const anchorEndpoint = tipEndpoint === 'tip' ? 'base' : 'tip';
+    contactCone.profile.contactDiameterMm = pickLeafEndpointDiameter(node, tipEndpoint, contactCone.profile.contactDiameterMm);
+    contactCone.profile.bodyDiameterMm = pickLeafEndpointDiameter(node, anchorEndpoint, contactCone.profile.bodyDiameterMm);
+
+    // A leaf on a twig is sized like a hand-placed one: the local taper diameter
+    // at the attach parameter, and the twig joint rule for its knot.
+    if (record.twig) {
+      const hostTwigDiameter = resolveTwigDiameterAtSegmentT(record.twig, decision.parentShaftId, decision.tClamped);
+      if (hostTwigDiameter !== null && hostTwigDiameter > 0) {
+        contactCone.profile.bodyDiameterMm = hostTwigDiameter;
+        knot.diameter = twigJointDiameterForLocalDiameter(hostTwigDiameter);
+      }
+    }
+
+    const leaf: Leaf = { id: uuidv4(), modelId: owner, parentKnotId: knot.id, contactCone };
+    state.format.leaves = [...state.format.leaves, leaf];
+    state.diagnostics.emitted.leaf = (state.diagnostics.emitted.leaf ?? 0) + 1;
+    return;
+  }
+
+  // A girder member names its own column height; anything else is a knot-to-cone run.
+  const columnHeight = gridColumnHeightMm(node);
+  const columnTopZ = columnHeight !== null ? columnHeight - frame.plateDropZ : null;
+  const columnJoint: Joint | null = columnTopZ !== null && columnTopZ > knot.pos.z
+    ? { id: uuidv4(), pos: { x: knot.pos.x, y: knot.pos.y, z: columnTopZ }, diameter: getJointDiameter(shaftDiameter) }
+    : null;
+
+  const segments: Segment[] = columnJoint
+    ? [
+      { id: uuidv4(), type: 'straight', diameter: shaftDiameter, bottomJoint: undefined, topJoint: columnJoint },
+      { id: uuidv4(), type: 'straight', diameter: shaftDiameter, bottomJoint: columnJoint, topJoint: socketJoint },
+    ]
+    : [{ id: uuidv4(), type: 'straight', diameter: shaftDiameter, bottomJoint: undefined, topJoint: socketJoint }];
+
+  const branch: Branch = { id: uuidv4(), modelId: owner, parentKnotId: knot.id, segments, contactCone };
+  state.format.branches = [...state.format.branches, branch];
+
+  // Publish so a grandchild can attach: this chain starts at the branch's knot.
+  let cursor = knot.pos;
+  state.hosts.set(node.id, {
+    skeleton: {
+      kind: 'branch',
+      segments: segments.map((seg) => {
+        const start = cursor;
+        const end = seg.topJoint?.pos ?? getFinalSocketPosition(contactCone);
+        cursor = end;
+        return { id: seg.id, start, end };
+      }),
+    },
+  });
+  state.diagnostics.emitted.branch = (state.diagnostics.emitted.branch ?? 0) + 1;
 }
 
 const EMITTERS: Partial<Record<SupportClass, (state: EmitState, node: LysNode) => void>> = {
   stick: emitStick,
   twig: emitTwig,
   trunk: emitTrunk,
+  branch: emitHosted,
+  leaf: emitHosted,
 };
 
 export function emitSupportGraph(
@@ -424,6 +608,8 @@ export function emitSupportGraph(
     settings,
     objects,
     frames: new Map(),
+    hosts: new Map(),
+    hasChildren: new Set(graph.hostEdges.map((edge) => edge.hostId)),
     mesh,
     diagnostics,
   };

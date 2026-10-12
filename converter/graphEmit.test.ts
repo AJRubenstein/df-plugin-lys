@@ -195,19 +195,20 @@ describe('graphEmit — trunk', () => {
 
 describe('graphEmit — pending classes', () => {
   it('names a class present in the graph that the pass does not build yet', () => {
-    // A hosted support with a real shaft: a branch, which needs the knot policy.
+    // A member spanning two hosts: a brace, which is still pending.
     const { format, diagnostics } = emitSupportGraph(
       sceneOf({
-        host: support({ id: 'host', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
-        child: support({ id: 'child', objectIdTip: 'o1', parentBaseId: 'host', base: { x: 0, y: 0, z: 10 }, tip: { x: 0, y: 0, z: 20 }, settings: { tip: { length: 2 } } }),
+        hostA: support({ id: 'hostA', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
+        hostB: support({ id: 'hostB', objectIdTip: 'o1', base: { x: 10, y: 0, z: 0.1 }, tip: { x: 10, y: 0, z: 30 } }),
+        span: support({ id: 'span', objectIdTip: 'o1', parentBaseId: 'hostA', parentTipId: 'hostB', base: { x: 0, y: 0, z: 10 }, tip: { x: 10, y: 0, z: 10 } }),
       }),
       settings as never,
     );
 
-    assert.deepEqual(diagnostics.notYetWired, ['branch']);
-    assert.equal(format.branches.length, 0);
-    // Its host is still emitted, so the pending class does not take the trunk with it.
-    assert.equal(format.trunks.length, 1);
+    assert.deepEqual(diagnostics.notYetWired, ['brace']);
+    assert.equal(format.braces.length, 0);
+    // Both hosts are still emitted, so the pending class does not take them with it.
+    assert.equal(format.trunks.length, 2);
   });
 
   it('reports a scene with no objects rather than inventing an owner', () => {
