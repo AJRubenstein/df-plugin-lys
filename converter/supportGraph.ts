@@ -30,6 +30,10 @@ export interface LysNode {
   hostBaseId: string | null;
   /** Host of the tip end, or null when that end is free. */
   hostTipId: string | null;
+  /** The object the tip-side endpoint belongs to. */
+  objectIdTip: string | null;
+  /** The object the base-side endpoint belongs to. */
+  objectIdBase: string | null;
   mini: boolean;
   isBaseTip: boolean;
   /** Present on girder/grid members; its authored column height is `settings.base.joinLength`. */
@@ -104,6 +108,8 @@ export function readLysNodes(data: LysData): ReadResult {
       settings: s.settings,
       hostBaseId: hostRef(s.parentBaseId),
       hostTipId: hostRef(s.parentTipId),
+      objectIdTip: hostRef(s.objectIdTip),
+      objectIdBase: hostRef(s.objectIdBase),
       mini: s.mini === true,
       isBaseTip: s.isBaseTip === true,
       gridNodeIndex: typeof s.gridNodeIndex === 'number' && Number.isFinite(s.gridNodeIndex)

@@ -44,6 +44,7 @@ describe('supportGraph.readLysNodes', () => {
     const data = sceneOf({
       s1: support({
         id: 's1',
+        objectIdTip: 'o1',
         mini: true,
         isBaseTip: true,
         gridNodeIndex: 385,
@@ -59,6 +60,8 @@ describe('supportGraph.readLysNodes', () => {
     assert.equal(node.gridNodeIndex, 385);
     assert.deepEqual(node.baseNormal, { x: 0, y: 1, z: 0 });
     assert.equal(node.tipNormal, undefined);
+    assert.equal(node.objectIdTip, 'o1');
+    assert.equal(node.objectIdBase, null);
     assert.equal(node.settings?.base?.joinLength, 80.25);
   });
 
