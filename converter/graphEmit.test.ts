@@ -82,16 +82,66 @@ describe('graphEmit — stick', () => {
   });
 });
 
-describe('graphEmit — pending classes', () => {
-  it('names a class present in the graph that the pass does not build yet', () => {
-    // Both normals, floating, span 1mm: a twig, which this pass does not wire.
+describe('graphEmit — twig', () => {
+  it('builds a twig whose joints sit off the disk centres along the surface normal', () => {
+    // Floating with a 1mm span: a twig. No mesh in this path, so each disk keeps
+    // its authored normal (the raycast fallback).
     const { format, diagnostics } = emitSupportGraph(
       sceneOf({ s: floating({ id: 's', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 11 } }) }),
       settings as never,
     );
 
-    assert.deepEqual(diagnostics.notYetWired, ['twig']);
-    assert.equal(format.twigs.length, 0);
+    assert.equal(format.twigs.length, 1);
+    assert.deepEqual(diagnostics.notYetWired, []);
+    const twig = format.twigs[0];
+    assert.equal(twig.contactDiskA.pos.z, 10);
+    assert.equal(twig.contactDiskB.pos.z, 11);
+
+    const segment = twig.segments[0];
+    // Each joint is the disk centre pushed along that disk's surface normal.
+    assert.ok(segment.bottomJoint);
+    assert.ok(segment.topJoint);
+    assert.notEqual(segment.bottomJoint.pos.z, twig.contactDiskA.pos.z);
+    assert.equal(segment.bottomJoint.pos.x, twig.contactDiskA.pos.x);
+    assert.ok(segment.bottomJoint.diameter > 0);
+  });
+
+  it('sizes a twig joint by the multiplicative taper rule, not the additive one', () => {
+    const { format } = emitSupportGraph(
+      sceneOf({
+        s: floating({ id: 's', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 11 }, settings: { tip: { pointDiameter: 2 }, baseTip: { pointDiameter: 2 } } }),
+      }),
+      settings as never,
+    );
+
+    const segment = format.twigs[0].segments[0];
+    assert.ok(Math.abs((segment.bottomJoint?.diameter ?? 0) - 2 * 1.1) < 1e-9);
+    assert.ok(Math.abs((segment.topJoint?.diameter ?? 0) - 2 * 1.1) < 1e-9);
+    assert.equal(segment.diameter, 2);
+  });
+
+  it('clears the joint radius when it offsets a joint off its disk', () => {
+    const { format } = emitSupportGraph(
+      sceneOf({ s: floating({ id: 's', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 11 } }) }),
+      settings as never,
+    );
+
+    const twig = format.twigs[0];
+    const jointRadius = (twig.segments[0].bottomJoint?.diameter ?? 0) / 2;
+    assert.ok((twig.contactDiskA.diskLengthOverride ?? 0) >= jointRadius + 0.05 - 1e-9);
+  });
+});
+
+describe('graphEmit — pending classes', () => {
+  it('names a class present in the graph that the pass does not build yet', () => {
+    // A plate-grounded base: a trunk, which this pass does not wire yet.
+    const { format, diagnostics } = emitSupportGraph(
+      sceneOf({ s: support({ id: 's', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }) }),
+      settings as never,
+    );
+
+    assert.deepEqual(diagnostics.notYetWired, ['trunk']);
+    assert.equal(format.trunks.length, 0);
   });
 
   it('reports a scene with no objects rather than inventing an owner', () => {

@@ -1,11 +1,15 @@
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
-import type { DragonfruitImportFormat, Segment, Stick, Vec3 } from '@/supports/types';
+import type { DragonfruitImportFormat, Segment, Stick, Twig, Vec3 } from '@/supports/types';
+import type { ContactDiskProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportSettings } from '@/supports/Settings';
+import { twigDiskJointStandoff } from '@/supports/SupportTypes/Twig/twigJointStandoff';
+import { twigJointDiameterForLocalDiameter } from '@/supports/SupportTypes/Twig/twigTaper';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { createContactAssembly } from './contactAssembly';
+import { raycastSurfaceNormal } from './convertLysData';
 import { pickStickEndpointTipSettings } from './helpers';
-import type { LysData, LysObject } from './types';
+import type { LysData, LysObject, LysTipSettings } from './types';
 import { classifySupportGraph, type ClassifyOptions, type SupportClass } from './graphClassify';
 import { buildSupportGraph, emissionOrder, type LysNode } from './supportGraph';
 
@@ -159,8 +163,131 @@ function emitStick(state: EmitState, node: LysNode): void {
   state.diagnostics.emitted.stick = (state.diagnostics.emitted.stick ?? 0) + 1;
 }
 
+/** `pickTwigContactDiameter`: point diameter, body diameter, then the tip profile's contact diameter. */
+function pickContactDiameterMm(endpointSettings: LysTipSettings | undefined, tipDefaults: SupportSettings['tip']): number {
+  const pointDiameter = endpointSettings?.pointDiameter;
+  if (typeof pointDiameter === 'number' && Number.isFinite(pointDiameter) && pointDiameter > 0) return pointDiameter;
+  const diameter = endpointSettings?.diameter;
+  if (typeof diameter === 'number' && Number.isFinite(diameter) && diameter > 0) return diameter;
+  return tipDefaults.contactDiameterMm;
+}
+
+/**
+ * A floating two-disk twig: one segment between two socket joints that sit off
+ * their disk centres by the native angle-aware standoff, so an imported twig is
+ * structurally identical to a hand-placed one (the knot-drag and taper paths
+ * resolve a host twig through those joints).
+ *
+ * The disk seats against the true model-surface normal (raycast) while the shaft
+ * keeps the authored angle — the same split the current converter makes.
+ */
+function emitTwig(state: EmitState, node: LysNode): void {
+  const owner = ownerOf(state, node);
+  const frame = frameFor(state, owner);
+  const baseWorld = frame.transformPoint(node.base);
+  const tipWorld = frame.transformPoint(node.tip);
+  const baseNormal = node.baseNormal ? frame.transformNormal(node.baseNormal) : null;
+  const tipNormal = node.tipNormal ? frame.transformNormal(node.tipNormal) : null;
+
+  if (!baseNormal || baseNormal.lengthSq() <= 1e-8 || !tipNormal || tipNormal.lengthSq() <= 1e-8) {
+    state.diagnostics.skipped.push(`${node.id}: twig without a usable normal at the ${baseNormal ? 'tip' : 'base'} end`);
+    return;
+  }
+
+  const axisA = tipWorld.clone().sub(baseWorld);
+  if (axisA.lengthSq() <= 1e-8) {
+    state.diagnostics.skipped.push(`${node.id}: twig with coincident contacts`);
+    return;
+  }
+  axisA.normalize();
+  const axisB = axisA.clone().multiplyScalar(-1);
+
+  const tipDefaults = state.settings.tip;
+  const baseSurfaceVec = raycastSurfaceNormal(baseWorld, baseNormal, frame.meshPivotShift, frame.mesh).normal;
+  const tipSurfaceVec = raycastSurfaceNormal(tipWorld, tipNormal, frame.meshPivotShift, frame.mesh).normal;
+
+  const contactDiameterA = pickContactDiameterMm(pickStickEndpointTipSettings(node, 'base'), tipDefaults);
+  const contactDiameterB = pickContactDiameterMm(pickStickEndpointTipSettings(node, 'tip'), tipDefaults);
+
+  const diskProfile: ContactDiskProfile = {
+    type: 'disk',
+    diskThicknessMm: tipDefaults.diskThicknessMm ?? 0.1,
+    maxStandoffMm: tipDefaults.maxStandoffMm ?? 1.5,
+    standoffAngleThreshold: tipDefaults.standoffAngleThreshold ?? Math.PI / 4,
+  };
+
+  const jointDiameterA = twigJointDiameterForLocalDiameter(contactDiameterA);
+  const jointDiameterB = twigJointDiameterForLocalDiameter(contactDiameterB);
+  const diskThicknessA = twigDiskJointStandoff({
+    surfaceNormal: baseSurfaceVec,
+    coneAxis: { x: axisA.x, y: axisA.y, z: axisA.z },
+    profile: diskProfile,
+    jointDiameterMm: jointDiameterA,
+  });
+  const diskThicknessB = twigDiskJointStandoff({
+    surfaceNormal: tipSurfaceVec,
+    coneAxis: { x: axisB.x, y: axisB.y, z: axisB.z },
+    profile: diskProfile,
+    jointDiameterMm: jointDiameterB,
+  });
+
+  const socketJointA = {
+    id: uuidv4(),
+    pos: {
+      x: baseWorld.x + baseSurfaceVec.x * diskThicknessA,
+      y: baseWorld.y + baseSurfaceVec.y * diskThicknessA,
+      z: baseWorld.z + baseSurfaceVec.z * diskThicknessA,
+    },
+    diameter: jointDiameterA,
+  };
+  const socketJointB = {
+    id: uuidv4(),
+    pos: {
+      x: tipWorld.x + tipSurfaceVec.x * diskThicknessB,
+      y: tipWorld.y + tipSurfaceVec.y * diskThicknessB,
+      z: tipWorld.z + tipSurfaceVec.z * diskThicknessB,
+    },
+    diameter: jointDiameterB,
+  };
+
+  const segment: Segment = {
+    id: uuidv4(),
+    type: 'straight',
+    diameter: Math.min(contactDiameterA, contactDiameterB),
+    bottomJoint: socketJointA,
+    topJoint: socketJointB,
+  };
+
+  const twig: Twig = {
+    id: uuidv4(),
+    modelId: owner,
+    segments: [segment],
+    contactDiskA: {
+      id: uuidv4(),
+      pos: { x: baseWorld.x, y: baseWorld.y, z: baseWorld.z },
+      surfaceNormal: baseSurfaceVec,
+      coneAxis: { x: axisA.x, y: axisA.y, z: axisA.z },
+      diskLengthOverride: diskThicknessA,
+      profile: diskProfile,
+      contactDiameterMm: contactDiameterA,
+    },
+    contactDiskB: {
+      id: uuidv4(),
+      pos: { x: tipWorld.x, y: tipWorld.y, z: tipWorld.z },
+      surfaceNormal: tipSurfaceVec,
+      coneAxis: { x: axisB.x, y: axisB.y, z: axisB.z },
+      diskLengthOverride: diskThicknessB,
+      profile: diskProfile,
+      contactDiameterMm: contactDiameterB,
+    },
+  };
+  state.format.twigs = [...state.format.twigs, twig];
+  state.diagnostics.emitted.twig = (state.diagnostics.emitted.twig ?? 0) + 1;
+}
+
 const EMITTERS: Partial<Record<SupportClass, (state: EmitState, node: LysNode) => void>> = {
   stick: emitStick,
+  twig: emitTwig,
 };
 
 export function emitSupportGraph(

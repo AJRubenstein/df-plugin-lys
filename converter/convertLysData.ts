@@ -86,7 +86,7 @@ import type { ContactDiskProfile } from '@/supports/SupportPrimitives/ContactCon
  * Returns a unit Vec3. Falls back to `authoredNormal` (already world-frame, unit) if the
  * mesh is absent, the authored normal is unusable, or the ray misses.
  */
-function raycastSurfaceNormal(
+export function raycastSurfaceNormal(
   contactWorld: THREE.Vector3,
   authoredNormal: THREE.Vector3,
   meshPivotShift: THREE.Vector3,
