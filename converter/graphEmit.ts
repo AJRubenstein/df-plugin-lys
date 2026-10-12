@@ -849,10 +849,15 @@ function emitKickstand(state: EmitState, node: LysNode): void {
     0,
   );
 
-  // A girder names its column height in plate-space `joinLength`; anything else
-  // rises to its own contact.
+  // A girder names its column height in plate-space `joinLength`, measured from
+  // the plate rather than from the support's own base. It describes the lattice
+  // the node belongs to, not this member, so it can name a height well above the
+  // end that attaches -- capped at the attach point, which is where the column
+  // meets its host and the height the builder's own derived joints rise to.
   const columnJoinLength = gridColumnHeightMm(node);
-  const columnTopZ = columnJoinLength !== null ? columnJoinLength - frame.plateDropZ : attachPoint.z;
+  const columnTopZ = columnJoinLength !== null
+    ? Math.min(columnJoinLength - frame.plateDropZ, attachPoint.z)
+    : attachPoint.z;
 
   const projection = projectOntoSkeleton(attachPoint, record.skeleton.segments);
   if (!projection) {
