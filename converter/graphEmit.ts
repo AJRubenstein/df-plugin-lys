@@ -1,14 +1,16 @@
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
-import type { DragonfruitImportFormat, Segment, Stick, Twig, Vec3 } from '@/supports/types';
+import type { DragonfruitImportFormat, Joint, Roots, Segment, Stick, Trunk, Twig, Vec3 } from '@/supports/types';
 import type { ContactDiskProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportSettings } from '@/supports/Settings';
+import { getJointDiameter } from '@/supports/constants';
 import { twigDiskJointStandoff } from '@/supports/SupportTypes/Twig/twigJointStandoff';
 import { twigJointDiameterForLocalDiameter } from '@/supports/SupportTypes/Twig/twigTaper';
+import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { createContactAssembly } from './contactAssembly';
 import { raycastSurfaceNormal } from './convertLysData';
-import { pickStickEndpointTipSettings } from './helpers';
+import { pickContactTipSettings, pickStickEndpointTipSettings } from './helpers';
 import type { LysData, LysObject, LysTipSettings } from './types';
 import { classifySupportGraph, type ClassifyOptions, type SupportClass } from './graphClassify';
 import { buildSupportGraph, emissionOrder, type LysNode } from './supportGraph';
@@ -39,6 +41,18 @@ export interface ObjectFrame {
    * scale and rotation. Used by the twig contact-normal raycast.
    */
   meshPivotShift: THREE.Vector3;
+  /**
+   * The drop the importer applies after conversion. Supports are built in
+   * pre-offset space, so anything measured from the plate subtracts it. Zero when
+   * no mesh is supplied, which is the snapshot harness path.
+   */
+  plateDropZ: number;
+  /**
+   * The object's authored position. `transformPoint` already includes it; the
+   * root/base convention does not use the object transform at all, so it needs
+   * the XY read directly.
+   */
+  objectPosition: Vec3;
   mesh?: THREE.Mesh;
 }
 
@@ -55,8 +69,26 @@ export function makeObjectFrame(object: LysObject | undefined, mesh?: THREE.Mesh
   const q = quaternionFromGlobalEulerDegrees(rot);
   const scratch = new THREE.Vector3();
 
+  // The drop the caller will apply afterwards, measured from the ghost mesh's
+  // lowest point once the object transform is on it.
+  let plateDropZ = 0;
+  if (mesh?.geometry) {
+    mesh.geometry.computeBoundingBox();
+    const bbox = mesh.geometry.boundingBox;
+    if (bbox) {
+      const geomCenter = bbox.getCenter(new THREE.Vector3());
+      const localTransform = new THREE.Matrix4()
+        .compose(new THREE.Vector3(0, 0, 0), q, new THREE.Vector3(scale.x || 1, scale.y || 1, scale.z || 1))
+        .multiply(new THREE.Matrix4().makeTranslation(-geomCenter.x, -geomCenter.y, -geomCenter.z));
+      const lowest = computeLowestZ(mesh.geometry, localTransform);
+      if (Number.isFinite(lowest)) plateDropZ = -lowest;
+    }
+  }
+
   return {
     mesh,
+    plateDropZ,
+    objectPosition: pos,
     transformPoint(v: Vec3): THREE.Vector3 {
       scratch.set(v.x * scale.x, v.y * scale.y, v.z * scale.z).applyQuaternion(q);
       return new THREE.Vector3(scratch.x + pos.x, scratch.y + pos.y, scratch.z + pos.z);
@@ -285,9 +317,89 @@ function emitTwig(state: EmitState, node: LysNode): void {
   state.diagnostics.emitted.twig = (state.diagnostics.emitted.twig ?? 0) + 1;
 }
 
+/**
+ * A rooted support: a plate root, a collar joint whose height comes from the
+ * authored join length, and a shaft up to the cone.
+ *
+ * The base position is authored in post-scale, post-rotation world XY relative
+ * to the object's world position, so it is floor-anchored rather than put
+ * through the object transform — the one place the two coordinate conventions in
+ * this format meet.
+ */
+function emitTrunk(state: EmitState, node: LysNode): void {
+  const owner = ownerOf(state, node);
+  const frame = frameFor(state, owner);
+  const tipWorld = frame.transformPoint(node.tip);
+  // Authored in post-scale, post-rotation world XY relative to the object, then
+  // carried by the object's own XY — the two conventions of this format meeting.
+  const baseRefWorld = new THREE.Vector3(
+    node.base.x + frame.objectPosition.x,
+    node.base.y + frame.objectPosition.y,
+    0,
+  );
+
+  const tipSettings = pickContactTipSettings(node);
+  const baseSettings = node.settings?.base;
+  const rootDefaults = state.settings.roots;
+  const shaftDefaults = state.settings.shaft;
+
+  const diskHeight = rootDefaults.diskHeightMm;
+  const coneHeight = rootDefaults.coneHeightMm;
+  const totalBaseHeight = diskHeight + coneHeight;
+  const pillarDiameter = baseSettings?.joinDiameter || tipSettings?.diameter || shaftDefaults.diameterMm;
+
+  const rootId = uuidv4();
+  const root: Roots = {
+    id: rootId,
+    modelId: owner,
+    transform: { pos: { x: baseRefWorld.x, y: baseRefWorld.y, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+    diameter: rootDefaults.diameterMm,
+    diskHeight,
+    coneHeight,
+  };
+
+  // `joinLength` is the visible collar; `newJoinLength` is what the source solved
+  // with. Both are plate-space, so both subtract the drop the caller will apply.
+  const visibleJoinLength = Number.isFinite(baseSettings?.joinLength as number)
+    ? Math.max(0, baseSettings?.joinLength as number)
+    : null;
+  const solveJoinLength = Number.isFinite(baseSettings?.newJoinLength as number)
+    ? Math.max(0, baseSettings?.newJoinLength as number)
+    : visibleJoinLength;
+
+  const joint0SolveRise = (solveJoinLength ?? totalBaseHeight) - frame.plateDropZ;
+  const joint0VisibleRiseRaw = visibleJoinLength !== null ? visibleJoinLength - frame.plateDropZ : joint0SolveRise;
+  // The knee clears the root collar by a hair: below that the collar swallows it.
+  const minimumVisibleKneeRise = totalBaseHeight + 0.05 - frame.plateDropZ;
+  const joint0Rise = Math.max(joint0VisibleRiseRaw, minimumVisibleKneeRise);
+  const joint0SolvePos: Vec3 = { x: baseRefWorld.x, y: baseRefWorld.y, z: baseRefWorld.z + joint0SolveRise };
+  const joint0: Joint = {
+    id: uuidv4(),
+    pos: { x: baseRefWorld.x, y: baseRefWorld.y, z: baseRefWorld.z + joint0Rise },
+    // The pillar runs through on both sides, so the joint is sized from it.
+    diameter: getJointDiameter(pillarDiameter),
+  };
+
+  const transformedTipNormal = node.tipNormal ? frame.transformNormal(node.tipNormal) : null;
+  const { socketJoint, contactCone } = createContactAssembly(
+    node, tipWorld, joint0SolvePos, tipSettings, state.settings.tip, frame.mesh, true, true, transformedTipNormal, true, pillarDiameter,
+  );
+
+  const segments: Segment[] = [
+    { id: uuidv4(), type: 'straight', diameter: pillarDiameter, bottomJoint: undefined, topJoint: joint0 },
+    { id: uuidv4(), type: 'straight', diameter: pillarDiameter, bottomJoint: joint0, topJoint: socketJoint },
+  ];
+  const trunk: Trunk = { id: uuidv4(), modelId: owner, rootId, segments, contactCone };
+
+  state.format.roots = [...state.format.roots, root];
+  state.format.trunks = [...state.format.trunks, trunk];
+  state.diagnostics.emitted.trunk = (state.diagnostics.emitted.trunk ?? 0) + 1;
+}
+
 const EMITTERS: Partial<Record<SupportClass, (state: EmitState, node: LysNode) => void>> = {
   stick: emitStick,
   twig: emitTwig,
+  trunk: emitTrunk,
 };
 
 export function emitSupportGraph(

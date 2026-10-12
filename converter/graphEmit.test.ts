@@ -132,16 +132,82 @@ describe('graphEmit — twig', () => {
   });
 });
 
-describe('graphEmit — pending classes', () => {
-  it('names a class present in the graph that the pass does not build yet', () => {
-    // A plate-grounded base: a trunk, which this pass does not wire yet.
+describe('graphEmit — trunk', () => {
+  const grounded = (over: Partial<LysSupport>): LysSupport => support({
+    base: { x: 2, y: 3, z: 0.1 },
+    tip: { x: 0, y: 0, z: 30 },
+    ...over,
+  });
+
+  it('builds a root and a trunk whose collar clears the root geometry', () => {
     const { format, diagnostics } = emitSupportGraph(
-      sceneOf({ s: support({ id: 's', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }) }),
+      sceneOf({ s: grounded({ id: 's', objectIdTip: 'o1' }) }),
       settings as never,
     );
 
-    assert.deepEqual(diagnostics.notYetWired, ['trunk']);
-    assert.equal(format.trunks.length, 0);
+    assert.equal(format.trunks.length, 1);
+    assert.equal(format.roots.length, 1);
+    assert.deepEqual(diagnostics.notYetWired, []);
+
+    const trunk = format.trunks[0];
+    assert.equal(trunk.rootId, format.roots[0].id);
+    assert.equal(trunk.segments.length, 2);
+    // The first segment runs from the root collar, so it has no bottom joint.
+    assert.equal(trunk.segments[0].bottomJoint, undefined);
+    const collar = trunk.segments[0].topJoint;
+    assert.ok(collar);
+    assert.equal(collar.pos.z, settings.roots.diskHeightMm + settings.roots.coneHeightMm + 0.05);
+    assert.equal(trunk.segments[1].bottomJoint?.id, collar.id);
+    assert.ok(trunk.segments[1].topJoint);
+  });
+
+  it('carries the object position into the root, which is not put through the object transform', () => {
+    const data = sceneOf({ s: grounded({ id: 's', objectIdTip: 'o1' }) });
+    data.objects = { present: { byId: { o1: { id: 'o1', position: { x: 10, y: 20, z: 5 }, scale: { x: 2, y: 2, z: 2 }, rotation: { x: 0, y: 0, z: 90 }, center: { x: 0, y: 0, z: 0 } } } } };
+
+    const { format } = emitSupportGraph(data, settings as never);
+
+    // Scale and rotation must NOT touch the root: only the object's own XY moves it.
+    assert.deepEqual(format.roots[0].transform.pos, { x: 12, y: 23, z: 0 });
+  });
+
+  it('takes the collar height from the authored join length when it exceeds the minima', () => {
+    const { format } = emitSupportGraph(
+      sceneOf({ s: grounded({ id: 's', objectIdTip: 'o1', settings: { base: { joinLength: 50 } } }) }),
+      settings as never,
+    );
+
+    assert.equal(format.trunks[0].segments[0].topJoint?.pos.z, 50);
+  });
+
+  it('sizes the collar joint from the pillar, and the pillar from the join diameter', () => {
+    const { format } = emitSupportGraph(
+      sceneOf({ s: grounded({ id: 's', objectIdTip: 'o1', settings: { base: { joinDiameter: 2 } } }) }),
+      settings as never,
+    );
+
+    const trunk = format.trunks[0];
+    assert.equal(trunk.segments[0].diameter, 2);
+    assert.equal(trunk.segments[0].topJoint?.diameter, 2.1);
+    assert.equal(trunk.contactCone.profile.bodyDiameterMm, 2);
+  });
+});
+
+describe('graphEmit — pending classes', () => {
+  it('names a class present in the graph that the pass does not build yet', () => {
+    // A hosted support with a real shaft: a branch, which needs the knot policy.
+    const { format, diagnostics } = emitSupportGraph(
+      sceneOf({
+        host: support({ id: 'host', objectIdTip: 'o1', base: { x: 0, y: 0, z: 0.1 }, tip: { x: 0, y: 0, z: 30 } }),
+        child: support({ id: 'child', objectIdTip: 'o1', parentBaseId: 'host', base: { x: 0, y: 0, z: 10 }, tip: { x: 0, y: 0, z: 20 }, settings: { tip: { length: 2 } } }),
+      }),
+      settings as never,
+    );
+
+    assert.deepEqual(diagnostics.notYetWired, ['branch']);
+    assert.equal(format.branches.length, 0);
+    // Its host is still emitted, so the pending class does not take the trunk with it.
+    assert.equal(format.trunks.length, 1);
   });
 
   it('reports a scene with no objects rather than inventing an owner', () => {
