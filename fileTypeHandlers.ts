@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
 import type { DragonfruitImportFormat, Joint } from '@/supports/types';
-import { hollowFromGeometry, type HollowOptions } from '@/utils/meshHollowing';
 import { LysParser } from './LysParser';
 import type { LysData, LysObject, LysSupport } from './converter/types';
 import { LysConverter } from './LysConverter';
@@ -10,21 +9,6 @@ import { createDefaultSettings } from '@/supports/Settings/types';
 import { computeLowestZ } from '@/utils/geometry';
 import { eulerFromGlobalEuler, quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
-
-/** Base64-encode a typed array for cavity position storage. */
-function bytesToBase64(bytes: Uint8Array): string {
-  if (typeof btoa === 'function') {
-    const CHUNK_SIZE = 0x8000;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-      const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-      binary += String.fromCharCode(...chunk);
-    }
-    return btoa(binary);
-  }
-  if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
-  throw new Error('No base64 encoding available');
-}
 
 /**
  * File-type import bridge for `.lys` scene files.
@@ -706,9 +690,15 @@ export async function importLysFile(
     }
   }
 
-  let singleGeom =
+  const singleGeom =
     (targetObjId ? data.geometriesByName.get(targetObjId) ?? data.geometriesByName.get(targetObjId.toLowerCase()) : null)
     ?? data.geometry;
+
+  // The stem `singleGeom` was found under, so its `_hollowing` sibling can be
+  // resolved the same way the multi-model path resolves each object's.
+  const singleMatchKey = objectsWithGeometry.length === 1
+    ? objectsWithGeometry[0].matchKey
+    : undefined;
 
   const importedModelId = uuidv4();
   let resolvedModelZ: number | null = null;
@@ -818,80 +808,20 @@ export async function importLysFile(
     }
   }
 
-  const finalMeshModifiers = LysConverter.convertHollowing(sceneDataForConvert, singleGeom, data.geometriesByName, data.isLegacyGeometry);
+  // Scoped to this object, as the multi-model path is: the geometry's own
+  // `_hollowing` blob is its cavity, and the host decides whether to bake it.
+  const singleCavityGeometry = singleMatchKey
+    ? data.geometriesByName.get(`${singleMatchKey}_hollowing`)
+      ?? data.geometriesByName.get(`${singleMatchKey.toLowerCase()}_hollowing`)
+    : undefined;
+
+  const finalMeshModifiers = LysConverter.convertHollowing(
+    sceneDataForConvert, singleGeom, data.geometriesByName, data.isLegacyGeometry,
+    // No target id means no named geometry matched, so the whole scene is the
+    // model and the unscoped lookup is the right one.
+    targetObjId ? { objectId: targetObjId, cavityGeometry: singleCavityGeometry } : undefined,
+  );
   console.log('[lys-import][debug] single-model meshModifiers:', finalMeshModifiers ? `hollowing=${!!finalMeshModifiers.hollowing} holes=${finalMeshModifiers.holePunches?.length ?? 0}` : 'undefined');
-
-  // ── Physically hollow the geometry when the Rust backend is available ──
-  // Instead of leaving the model solid + a separate cavity mesh, call the
-  // voxel engine right here so the model loads as physically hollowed.
-  // The original solid geometry is snapshotted so "Remove Hollowing" can
-  // restore it later.
-  if (finalMeshModifiers?.hollowing?.enabled && singleGeom.boundingBox) {
-    const bboxSize = singleGeom.boundingBox.getSize(new THREE.Vector3());
-    const maxExtent = Math.max(bboxSize.x, bboxSize.y, bboxSize.z);
-    const shellThickness = finalMeshModifiers.hollowing.shellThicknessMm ?? 2;
-
-    // Simple voxel resolution: aim for ~0.5mm voxels relative to model size.
-    const voxelResolution = Math.max(32, Math.min(256,
-      Math.round(maxExtent / (finalMeshModifiers.hollowing.voxelSizeMm ?? 0.5))
-    ));
-
-    // Snapshot the original solid geometry for later "Remove Hollowing".
-    const posAttr = singleGeom.getAttribute('position');
-    if (posAttr) {
-      const srcFloats = posAttr.array instanceof Float32Array
-        ? posAttr.array
-        : new Float32Array(posAttr.array);
-      const srcBytes = new Uint8Array(srcFloats.buffer, srcFloats.byteOffset, srcFloats.byteLength);
-      finalMeshModifiers.hollowing!.sourcePositionsBase64 = bytesToBase64(srcBytes);
-      finalMeshModifiers.hollowing!.sourcePositionCount = posAttr.count;
-    }
-
-    const hollowOptions: HollowOptions = {
-      mode: finalMeshModifiers.hollowing.mode === 'shell_open_face' ? 'cavity' : finalMeshModifiers.hollowing.mode,
-      voxelResolution,
-      shellThicknessMm: shellThickness,
-      infillMode: finalMeshModifiers.hollowing.infillMode ?? 'lattice',
-      infillCellMm: finalMeshModifiers.hollowing.infillCellMm ?? 5,
-      infillBeamRadiusMm: finalMeshModifiers.hollowing.infillBeamRadiusMm ?? 0.5,
-      openFace: finalMeshModifiers.hollowing.openFace,
-      drainHoles: [],
-      previewCavityOnly: false,
-      // Re-hollow with full smoothing — the Lychee pre-computed cavity is
-      // not used for the boolean merge, so we need the same Taubin + chamfer
-      // passes as native DF hollowing to avoid a blocky voxel-isosurface look.
-      smoothInternalSurfaces: true,
-      internalChamferPasses: 2,
-    };
-
-    try {
-      console.log('[lys-import] Applying voxel hollowing with shellThickness:', shellThickness);
-      const hollowResult = await hollowFromGeometry(singleGeom, hollowOptions);
-      if (hollowResult) {
-        console.log('[lys-import] Hollowing succeeded — replacing geometry');
-        const hollowedGeometry = new THREE.BufferGeometry();
-        hollowedGeometry.setAttribute('position', new THREE.BufferAttribute(hollowResult.positions, 3));
-        hollowedGeometry.computeVertexNormals();
-        hollowedGeometry.computeBoundingBox();
-        singleGeom = hollowedGeometry;
-
-        // Store cavity positions from the Rust engine for Interior View.
-        if (hollowResult.cavityPositions) {
-          const bytes = new Uint8Array(
-            hollowResult.cavityPositions.buffer,
-            hollowResult.cavityPositions.byteOffset,
-            hollowResult.cavityPositions.byteLength,
-          );
-          finalMeshModifiers.hollowing!.cavityPositionsBase64 = bytesToBase64(bytes);
-          finalMeshModifiers.hollowing!.cavityPositionCount = hollowResult.cavityPositions.length / 3;
-        }
-        finalMeshModifiers.hollowing!.bakedIntoGeometry = true;
-        console.log('[lys-import] Hollowing applied — new vertex count:', hollowResult.positions.length / 3);
-      }
-    } catch (err) {
-      console.warn('[lys-import] Voxel hollowing failed (likely browser mode), using cavity-only approach:', err);
-    }
-  }
 
   console.log('[lys-import][debug] single-model payload generated', {
     targetObjId,
