@@ -128,8 +128,13 @@ interface EmitState {
   hosts: Map<string, HostRecord>;
   /** Ids referenced as a host by at least one node. */
   hasChildren: Set<string>;
-  /** Brace knots by site key, so two braces meeting at one point share a knot. */
-  braceKnots: Map<string, Knot>;
+  /**
+   * Every knot by its site — (shaft, position, diameter). One store for every path
+   * that creates a knot, because a site on a shaft is one knot however many
+   * supports attach there. The old code keyed this way for braces alone, so a leaf
+   * fanned onto a twig with six siblings got seven knots at one point.
+   */
+  knotsBySite: Map<string, Knot>;
   mesh?: THREE.Mesh;
   diagnostics: EmitDiagnostics;
 }
@@ -509,14 +514,9 @@ function emitHosted(state: EmitState, node: LysNode): void {
   }
 
   const knotImportHint: NonNullable<Knot['_importHint']> = decision.chose === 'authored' ? 'preserve' : 'project';
-  const knot: Knot = {
-    id: uuidv4(),
-    parentShaftId: decision.parentShaftId,
-    t: decision.t,
-    pos: decision.pos,
-    _importHint: knotImportHint,
-  };
-  state.format.knots = [...state.format.knots, knot];
+  // Several supports attaching at one point on a shaft are one knot, so this is
+  // shared: a leaf fanned onto a twig beside six siblings does not get its own.
+  const knot: Knot = knotAt(state, decision.parentShaftId, decision.t, decision.pos, undefined, knotImportHint);
 
   const shaftLength = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z).distanceTo(contactPoint) - tipLen;
   const isLeaf = (node.mini || shaftLength <= 0.2) && !state.hasChildren.has(node.id);
@@ -681,8 +681,8 @@ function emitBrace(state: EmitState, node: LysNode): void {
     return local !== null && local > 0 ? twigJointDiameterForLocalDiameter(local) : braceJointDiameter;
   };
 
-  const knotA = braceKnot(state, projA.parentShaftId, parameterOnSegment(pA, projA.segment), pA, knotDiameterForHost(hostA.skeleton, hostA.twig, projA));
-  const knotB = braceKnot(state, projB.parentShaftId, parameterOnSegment(pB, projB.segment), pB, knotDiameterForHost(hostB.skeleton, hostB.twig, projB));
+  const knotA = knotAt(state, projA.parentShaftId, parameterOnSegment(pA, projA.segment), pA, knotDiameterForHost(hostA.skeleton, hostA.twig, projA), 'braceImported');
+  const knotB = knotAt(state, projB.parentShaftId, parameterOnSegment(pB, projB.segment), pB, knotDiameterForHost(hostB.skeleton, hostB.twig, projB), 'braceImported');
 
   const brace: Brace = {
     id: uuidv4(),
@@ -696,19 +696,22 @@ function emitBrace(state: EmitState, node: LysNode): void {
 }
 
 /**
- * Endpoints agreeing on shaft, position and diameter are one attachment point —
- * the identity the old code keyed on and, in crys, failed to dedupe. Diameter is
- * part of the key because a tapered host gives two endpoints at one site
- * different diameters.
+ * The one knot at a site.
+ *
+ * Endpoints agreeing on shaft, position and diameter are one attachment point, so
+ * they are one knot — the identity the old code keyed on for braces and failed to
+ * apply anywhere else. The first caller wins the hint when several agree on a
+ * site, which on the corpus never differs; the diameter likewise cannot disagree,
+ * because a site's diameter comes from the host's own taper at that parameter.
  */
-function braceKnot(state: EmitState, parentShaftId: string, t: number, pos: Vec3, diameter: number): Knot {
-  const round = (v: number) => Math.round(v * 1000) / 1000;
+function knotAt(state: EmitState, parentShaftId: string, t: number, pos: Vec3, diameter: number | undefined, hint: NonNullable<Knot['_importHint']>): Knot {
+  const round = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : 'none');
   const key = `${parentShaftId}|${round(pos.x)},${round(pos.y)},${round(pos.z)}|${round(diameter)}`;
-  const existing = state.braceKnots.get(key);
+  const existing = state.knotsBySite.get(key);
   if (existing) return existing;
 
-  const knot: Knot = { id: uuidv4(), parentShaftId, t, pos: { ...pos }, diameter, _importHint: 'braceImported' };
-  state.braceKnots.set(key, knot);
+  const knot: Knot = { id: uuidv4(), parentShaftId, t, pos: { ...pos }, diameter, _importHint: hint };
+  state.knotsBySite.set(key, knot);
   state.format.knots = [...state.format.knots, knot];
   return knot;
 }
@@ -778,10 +781,15 @@ function emitKickstand(state: EmitState, node: LysNode): void {
       : {}),
   });
 
+  // Register the host knot at its site. The builder made a fresh one, so when the
+  // site is already taken the column is repointed at the knot that exists rather
+  // than adding a second knot to the same point.
+  const hostKnot = knotAt(state, build.hostKnot.parentShaftId, build.hostKnot.t, build.hostKnot.pos as Vec3, build.hostKnot.diameter, 'braceImported');
+  if (hostKnot.id !== build.hostKnot.id) {
+    build.kickstand.hostKnotId = hostKnot.id;
+    build.hostKnot = hostKnot;
+  }
   state.format.kickstands = [...state.format.kickstands, build];
-  // The host knot belongs in the payload: the kickstand references it, and leaving
-  // it out made every file with a kickstand carry a dangling knot reference.
-  state.format.knots = [...state.format.knots, build.hostKnot];
 
   // Publish, so a brace can attach to the column — girder members do.
   let cursor: Vec3 = {
@@ -836,7 +844,7 @@ export function emitSupportGraph(
     frames: new Map(),
     hosts: new Map(),
     hasChildren: new Set(graph.hostEdges.map((edge) => edge.hostId)),
-    braceKnots: new Map(),
+    knotsBySite: new Map(),
     mesh,
     diagnostics,
   };
