@@ -779,6 +779,9 @@ function emitKickstand(state: EmitState, node: LysNode): void {
   });
 
   state.format.kickstands = [...state.format.kickstands, build];
+  // The host knot belongs in the payload: the kickstand references it, and leaving
+  // it out made every file with a kickstand carry a dangling knot reference.
+  state.format.knots = [...state.format.knots, build.hostKnot];
 
   // Publish, so a brace can attach to the column — girder members do.
   let cursor: Vec3 = {
