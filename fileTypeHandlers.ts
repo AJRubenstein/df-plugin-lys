@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
-import type { DragonfruitImportFormat, Joint } from '@/supports/types';
+import type { DragonfruitImportFormat, Joint, Knot } from '@/supports/types';
 import { LysParser } from './LysParser';
 import type { LysData, LysObject, LysSupport } from './converter/types';
 import { LysConverter } from './LysConverter';
@@ -124,19 +124,26 @@ function applySupportZOffset(importData: DragonfruitImportFormat | null | undefi
     if (stick?.contactConeB?.pos) stick.contactConeB.pos.z += deltaZ;
   }
 
-  for (const knot of importData.knots || []) {
-    if (knot?.pos) knot.pos.z += deltaZ;
-  }
+  const shiftedKnotIds = new Set<string>();
+  const shiftKnot = (knot: Knot | null | undefined) => {
+    if (!knot?.pos) return;
+    const key = typeof knot.id === 'string' ? knot.id : null;
+    if (key && shiftedKnotIds.has(key)) return;
+    knot.pos.z += deltaZ;
+    if (key) shiftedKnotIds.add(key);
+  };
 
-  // Kickstands bundle their own root and host knot rather than filing them in
-  // `roots`/`knots`, so they are shifted here or not at all.
+  for (const knot of importData.knots || []) shiftKnot(knot);
+
+  // A kickstand bundles its own root and host knot. The host knot is also filed in
+  // `knots`, as the same object, so it is shifted by id or it moves twice.
   for (const build of importData.kickstands || []) {
     for (const seg of build?.kickstand?.segments || []) {
       shiftJoint(seg?.bottomJoint);
       shiftJoint(seg?.topJoint);
     }
     if (build?.root?.transform?.pos) build.root.transform.pos.z += deltaZ;
-    if (build?.hostKnot?.pos) build.hostKnot.pos.z += deltaZ;
+    shiftKnot(build?.hostKnot);
   }
 }
 
