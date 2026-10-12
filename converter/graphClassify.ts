@@ -47,7 +47,7 @@ export interface NodeClassification {
   reason: string;
 }
 
-/** The old `hasValidNormal`: finite and not a zero vector. */
+/** A normal is usable when it is finite and not a zero vector. */
 export function hasUsableNormal(v: LysNode['baseNormal']): boolean {
   if (!v) return false;
   return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z)

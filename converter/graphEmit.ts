@@ -11,8 +11,8 @@ import { twigDiskJointStandoff } from '@/supports/SupportTypes/Twig/twigJointSta
 import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from '@/supports/SupportTypes/Twig/twigTaper';
 import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
+import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtils';
 import { createContactAssembly } from './contactAssembly';
-import { raycastSurfaceNormal } from './convertLysData';
 import { pickContactTipSettings, pickStickEndpointTipSettings, gridColumnHeightMm, inferLeafTipEndpoint, pickLeafEndpointDiameter } from './helpers';
 import { decideKnot, parameterOnSegment, projectOntoSkeleton, type HostSegment, type HostSkeleton } from './knotPolicy';
 import type { LysData, LysObject, LysTipSettings } from './types';
@@ -108,6 +108,55 @@ export function makeObjectFrame(object: LysObject | undefined, mesh?: THREE.Mesh
     },
     meshPivotShift: new THREE.Vector3(pivot.x * scale.x, pivot.y * scale.y, pivot.z * scale.z).applyQuaternion(q),
   };
+}
+
+/**
+ * The true model-surface normal at a contact, from the mesh the caller supplied.
+ *
+ * Lychee's authored normal is the approach direction of the sphere it contacts
+ * with, not the surface normal, and at steep angles the two diverge badly — so a
+ * contact disk seated on the authored normal sits at the wrong angle on the face.
+ * The shaft keeps the authored angle and the disk pivots to the real one.
+ *
+ * Frame note: the caller's contact points do not share a frame with the ghost
+ * mesh, whose inner mesh is offset by `-pivot` before the group's scale and
+ * rotation. Subtracting `meshPivotShift` lands the point on that mesh before the
+ * cast, and the smoothed normal comes back in world frame.
+ */
+function raycastSurfaceNormal(
+  contactWorld: THREE.Vector3,
+  authoredNormal: THREE.Vector3,
+  meshPivotShift: THREE.Vector3,
+  mesh?: THREE.Mesh,
+): { normal: Vec3; raycastHit: boolean } {
+  const fallback = { normal: { x: authoredNormal.x, y: authoredNormal.y, z: authoredNormal.z }, raycastHit: false };
+  if (!mesh || authoredNormal.lengthSq() <= 1e-8) return fallback;
+
+  const meshFrameContact = contactWorld.clone().sub(meshPivotShift);
+  const dir = authoredNormal.clone().normalize().multiplyScalar(-1); // travel INTO the surface
+  // Originate well outside the mesh so the ray enters from outside the solid.
+  mesh.geometry.computeBoundingSphere();
+  const boundingRadius = mesh.geometry.boundingSphere?.radius ?? 0;
+  const origin = meshFrameContact.clone().addScaledVector(dir, -(boundingRadius * 2 + 50));
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.set(origin, dir);
+  const intersects = raycaster.intersectObject(mesh, false);
+  if (intersects.length === 0) return fallback;
+
+  // Pick the intersection nearest the (compensated) contact point.
+  let best = intersects[0];
+  let bestDist = best.point.distanceTo(meshFrameContact);
+  for (const hit of intersects) {
+    const dist = hit.point.distanceTo(meshFrameContact);
+    if (dist < bestDist) { best = hit; bestDist = dist; }
+  }
+
+  const smoothed = calculateSmoothedNormal(best);
+  const n = new THREE.Vector3(smoothed.x, smoothed.y, smoothed.z);
+  if (n.lengthSq() <= 1e-8) return fallback;
+  n.normalize();
+  return { normal: { x: n.x, y: n.y, z: n.z }, raycastHit: true };
 }
 
 export interface EmitDiagnostics {
@@ -704,14 +753,40 @@ function emitBrace(state: EmitState, node: LysNode): void {
  * site, which on the corpus never differs; the diameter likewise cannot disagree,
  * because a site's diameter comes from the host's own taper at that parameter.
  */
-function knotAt(state: EmitState, parentShaftId: string, t: number, pos: Vec3, diameter: number | undefined, hint: NonNullable<Knot['_importHint']>): Knot {
+const knotSiteKey = (parentShaftId: string, pos: Vec3, diameter: number | undefined): string => {
   const round = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : 'none');
-  const key = `${parentShaftId}|${round(pos.x)},${round(pos.y)},${round(pos.z)}|${round(diameter)}`;
+  return `${parentShaftId}|${round(pos.x)},${round(pos.y)},${round(pos.z)}|${round(diameter)}`;
+};
+
+/**
+ * Register a knot someone else built (the kickstand builder), keeping its object
+ * as-is. Returns the knot already at that site when there is one, so the caller
+ * can repoint at it instead of adding a second knot to the same point.
+ */
+function registerKnot(state: EmitState, knot: Knot): Knot {
+  const key = knotSiteKey(knot.parentShaftId, knot.pos as Vec3, knot.diameter);
   const existing = state.knotsBySite.get(key);
   if (existing) return existing;
-
-  const knot: Knot = { id: uuidv4(), parentShaftId, t, pos: { ...pos }, diameter, _importHint: hint };
   state.knotsBySite.set(key, knot);
+  state.format.knots = [...state.format.knots, knot];
+  return knot;
+}
+
+function knotAt(state: EmitState, parentShaftId: string, t: number, pos: Vec3, diameter: number | undefined, hint?: Knot['_importHint']): Knot {
+  const existing = state.knotsBySite.get(knotSiteKey(parentShaftId, pos, diameter));
+  if (existing) return existing;
+
+  // Only the paths that had a hint stamp one: a knot the kickstand builder made
+  // carries none, and inventing one would change how the load path normalizes it.
+  const knot: Knot = {
+    id: uuidv4(),
+    parentShaftId,
+    t,
+    pos: { ...pos },
+    diameter,
+    ...(hint ? { _importHint: hint } : {}),
+  };
+  state.knotsBySite.set(knotSiteKey(parentShaftId, pos, diameter), knot);
   state.format.knots = [...state.format.knots, knot];
   return knot;
 }
@@ -784,7 +859,7 @@ function emitKickstand(state: EmitState, node: LysNode): void {
   // Register the host knot at its site. The builder made a fresh one, so when the
   // site is already taken the column is repointed at the knot that exists rather
   // than adding a second knot to the same point.
-  const hostKnot = knotAt(state, build.hostKnot.parentShaftId, build.hostKnot.t, build.hostKnot.pos as Vec3, build.hostKnot.diameter, 'braceImported');
+  const hostKnot = registerKnot(state, build.hostKnot);
   if (hostKnot.id !== build.hostKnot.id) {
     build.kickstand.hostKnotId = hostKnot.id;
     build.hostKnot = hostKnot;
