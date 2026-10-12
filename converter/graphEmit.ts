@@ -35,8 +35,18 @@ import { buildSupportGraph, emissionOrder, type HostEnd, type LysNode } from './
 
 /** The per-object frame a node's authored coordinates are read in. */
 export interface ObjectFrame {
-  /** `transformObjectPoint`: scale, then rotation, then the object's lift. */
+  /** `transformObjectPoint` plus the object's own XY: the final payload frame. */
   transformPoint(v: Vec3): THREE.Vector3;
+  /**
+   * The point in the GHOST MESH's frame: `transformObjectPoint` as the old
+   * converter had it, carrying the object's lift but not its XY.
+   *
+   * The caller builds the ghost mesh in a group at `(0, 0, pos.z)` — the XY shift
+   * is applied to the payload afterwards, not to the mesh — so a raycast must be
+   * fed points in this frame or it is aimed a whole object-position away from the
+   * mesh and hits the wrong surface (or nothing).
+   */
+  meshFramePoint(v: Vec3): THREE.Vector3;
   /** `transformObjectNormal`: inverse scale, then rotation, renormalised. */
   transformNormal(v: Vec3): THREE.Vector3;
   /**
@@ -96,6 +106,10 @@ export function makeObjectFrame(object: LysObject | undefined, mesh?: THREE.Mesh
     transformPoint(v: Vec3): THREE.Vector3 {
       scratch.set(v.x * scale.x, v.y * scale.y, v.z * scale.z).applyQuaternion(q);
       return new THREE.Vector3(scratch.x + pos.x, scratch.y + pos.y, scratch.z + pos.z);
+    },
+    meshFramePoint(v: Vec3): THREE.Vector3 {
+      scratch.set(v.x * scale.x, v.y * scale.y, v.z * scale.z).applyQuaternion(q);
+      return new THREE.Vector3(scratch.x, scratch.y, scratch.z + pos.z);
     },
     transformNormal(v: Vec3): THREE.Vector3 {
       scratch.set(
@@ -311,8 +325,10 @@ function emitTwig(state: EmitState, node: LysNode): void {
   const axisB = axisA.clone().multiplyScalar(-1);
 
   const tipDefaults = state.settings.tip;
-  const baseSurfaceVec = raycastSurfaceNormal(baseWorld, baseNormal, frame.meshPivotShift, frame.mesh).normal;
-  const tipSurfaceVec = raycastSurfaceNormal(tipWorld, tipNormal, frame.meshPivotShift, frame.mesh).normal;
+  // Raycast in the ghost mesh's frame, not the payload's: the mesh carries the
+  // object's lift but not its XY, and the caller applies the XY shift afterwards.
+  const baseSurfaceVec = raycastSurfaceNormal(frame.meshFramePoint(node.base), baseNormal, frame.meshPivotShift, frame.mesh).normal;
+  const tipSurfaceVec = raycastSurfaceNormal(frame.meshFramePoint(node.tip), tipNormal, frame.meshPivotShift, frame.mesh).normal;
 
   const contactDiameterA = pickContactDiameterMm(pickStickEndpointTipSettings(node, 'base'), tipDefaults);
   const contactDiameterB = pickContactDiameterMm(pickStickEndpointTipSettings(node, 'tip'), tipDefaults);
@@ -566,8 +582,14 @@ function emitHosted(state: EmitState, node: LysNode): void {
   // Several supports attaching at one point on a shaft are one knot, so this is
   // shared: a leaf fanned onto a twig beside six siblings does not get its own.
   const knot: Knot = knotAt(state, decision.parentShaftId, decision.t, decision.pos, undefined, knotImportHint);
+  // Sharing is identity only. The geometry below stays on THIS node's own attach
+  // point, because a shared knot's position is the first caller's: the site key
+  // rounds, so another node's point can differ from it by up to half a thousandth,
+  // and that is enough to flip a boundary test (a girder branch losing its column
+  // joint) or nudge a joint.
+  const knotPos: Vec3 = decision.pos;
 
-  const shaftLength = new THREE.Vector3(knot.pos.x, knot.pos.y, knot.pos.z).distanceTo(contactPoint) - tipLen;
+  const shaftLength = new THREE.Vector3(knotPos.x, knotPos.y, knotPos.z).distanceTo(contactPoint) - tipLen;
   const isLeaf = (node.mini || shaftLength <= 0.2) && !state.hasChildren.has(node.id);
   const shaftDiameter = node.settings?.base?.joinDiameter
     || tipSettings?.diameter
@@ -575,19 +597,19 @@ function emitHosted(state: EmitState, node: LysNode): void {
   const transformedTipNormal = node.tipNormal ? frame.transformNormal(node.tipNormal) : null;
 
   const { socketJoint, contactCone } = createContactAssembly(
-    node, contactPoint, knot.pos, tipSettings, state.settings.tip, frame.mesh, true, true, transformedTipNormal, true,
+    node, contactPoint, knotPos, tipSettings, state.settings.tip, frame.mesh, true, true, transformedTipNormal, true,
     // A leaf is all cone, with no shaft to take a width from.
     isLeaf ? undefined : shaftDiameter,
   );
 
   if (isLeaf) {
-    socketJoint.pos = knot.pos;
+    socketJoint.pos = knotPos;
     // Aim and length the cone with the canonical routine the load path and the
     // live drag preview use, so the import does not snap on first drag. The model
     // contact is held fixed: only the knot-side angle and length change.
     const leafSurfaceNormal = contactCone.surfaceNormal ?? contactCone.normal;
     const { axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
-      contactCone.pos, leafSurfaceNormal, knot.pos, contactCone.profile,
+      contactCone.pos, leafSurfaceNormal, knotPos, contactCone.profile,
     );
     contactCone.normal = axis;
     contactCone.profile.lengthMm = lengthMm;
@@ -616,8 +638,8 @@ function emitHosted(state: EmitState, node: LysNode): void {
   // A girder member names its own column height; anything else is a knot-to-cone run.
   const columnHeight = gridColumnHeightMm(node);
   const columnTopZ = columnHeight !== null ? columnHeight - frame.plateDropZ : null;
-  const columnJoint: Joint | null = columnTopZ !== null && columnTopZ > knot.pos.z
-    ? { id: uuidv4(), pos: { x: knot.pos.x, y: knot.pos.y, z: columnTopZ }, diameter: getJointDiameter(shaftDiameter) }
+  const columnJoint: Joint | null = columnTopZ !== null && columnTopZ > knotPos.z
+    ? { id: uuidv4(), pos: { x: knotPos.x, y: knotPos.y, z: columnTopZ }, diameter: getJointDiameter(shaftDiameter) }
     : null;
 
   const segments: Segment[] = columnJoint
@@ -631,7 +653,7 @@ function emitHosted(state: EmitState, node: LysNode): void {
   state.format.branches = [...state.format.branches, branch];
 
   // Publish so a grandchild can attach: this chain starts at the branch's knot.
-  let cursor = knot.pos;
+  let cursor = knotPos;
   state.hosts.set(node.id, {
     skeleton: {
       kind: 'branch',

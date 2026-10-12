@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { createDefaultSettings } from '@/supports/Settings/types';
-import { emitSupportGraph } from './graphEmit';
+import { emitSupportGraph, makeObjectFrame } from './graphEmit';
 import type { LysData, LysSupport } from './types';
 
 const settings = createDefaultSettings();
@@ -252,6 +252,31 @@ describe('graphEmit — brace and kickstand', () => {
 
     assert.equal(format.kickstands.length, 0);
     assert.match(diagnostics.skipped.join(' '), /column: kickstand cannot attach to a twig host/);
+  });
+});
+
+describe('graphEmit — object frame', () => {
+  const object = {
+    id: 'o1',
+    position: { x: 10, y: -20, z: 5 },
+    scale: { x: 1, y: 1, z: 1 },
+    rotation: { x: 0, y: 0, z: 0 },
+    center: { x: 0, y: 0, z: 0 },
+  };
+
+  it('carries the object XY in the payload frame but not in the mesh frame', () => {
+    const frame = makeObjectFrame(object as never);
+
+    assert.deepEqual(frame.transformPoint({ x: 1, y: 2, z: 3 }), { x: 11, y: -18, z: 8 });
+    // The ghost mesh's group sits at (0, 0, lift): a raycast aimed with the XY in
+    // it is aimed a whole object-position away from the surface it should hit.
+    assert.deepEqual(frame.meshFramePoint({ x: 1, y: 2, z: 3 }), { x: 1, y: 2, z: 8 });
+  });
+
+  it('keeps the two frames identical for an object at the origin', () => {
+    const frame = makeObjectFrame({ ...object, position: { x: 0, y: 0, z: 5 } } as never);
+
+    assert.deepEqual(frame.transformPoint({ x: 1, y: 2, z: 3 }), frame.meshFramePoint({ x: 1, y: 2, z: 3 }));
   });
 });
 
