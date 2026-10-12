@@ -11,7 +11,7 @@ import type {
 } from '@/features/mesh-modifiers/types';
 import { MeshBVH } from 'three-mesh-bvh';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
-import { convertLysData } from './converter/convertLysData';
+import { emitSupportGraph } from './converter/graphEmit';
 import { LysData, LysHollowing } from './converter/types';
 
 /**
@@ -280,7 +280,7 @@ export class LysConverter {
       meshVertexCount: mesh?.geometry?.getAttribute('position')?.count ?? null,
     });
 
-    const converted = convertLysData(data, settings, mesh);
+    const converted = emitSupportGraph(data, settings, mesh).format;
 
     console.log('[LysConverter][debug] convert:done', {
       outputSummary: this.summarizeConvertedData(converted),

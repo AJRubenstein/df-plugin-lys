@@ -7,7 +7,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { LysParser } from '../LysParser';
-import { convertLysData } from '../converter/convertLysData';
+import { emitSupportGraph } from '../converter/graphEmit';
 import { createDefaultSettings } from '@/supports/Settings';
 
 const q = (n: number | undefined) => (typeof n === 'number' ? Math.round(n * 1000) / 1000 : null);
@@ -28,7 +28,7 @@ async function main() {
   console.warn = (...a: unknown[]) => { warnings.push(a.join(' ')); };
   let out: any;
   try {
-    out = convertLysData(data.sceneData, createDefaultSettings() as any);
+    out = emitSupportGraph(data.sceneData, createDefaultSettings() as any).format;
   } finally {
     console.log = origLog;
     console.warn = origWarn;
