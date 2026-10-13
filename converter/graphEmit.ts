@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { v4 as uuidv4 } from 'uuid';
-import type { Branch, DragonfruitImportFormat, Joint, Knot, Leaf, Roots, Segment, Stick, Trunk, Twig, Vec3 } from '@/supports/types';
+import type { Brace, Branch, DragonfruitImportFormat, Joint, Knot, Leaf, Roots, Segment, Stick, Trunk, Twig, Vec3 } from '@/supports/types';
 import type { ContactDiskProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportSettings } from '@/supports/Settings';
 import { getJointDiameter } from '@/supports/constants';
@@ -182,8 +182,12 @@ export interface EmitDiagnostics {
   skipped: string[];
 }
 
+/** The emitter fills every collection, so none of them is optional while it runs. */
+export type EmitFormat = DragonfruitImportFormat
+  & Required<Pick<DragonfruitImportFormat, 'roots' | 'trunks' | 'branches' | 'leaves' | 'twigs' | 'sticks' | 'braces' | 'knots' | 'kickstands'>>;
+
 interface EmitState {
-  format: DragonfruitImportFormat;
+  format: EmitFormat;
   settings: SupportSettings;
   objects: Record<string, LysObject>;
   frames: Map<string, ObjectFrame>;
@@ -925,13 +929,13 @@ export function emitSupportGraph(
   settings: SupportSettings,
   mesh?: THREE.Mesh,
   classifyOptions?: ClassifyOptions,
-): { format: DragonfruitImportFormat; diagnostics: EmitDiagnostics } {
+): { format: EmitFormat; diagnostics: EmitDiagnostics } {
   const graph = buildSupportGraph(data, { strict: false });
   const objects = (data?.objects?.present?.byId ?? {}) as Record<string, LysObject>;
   const firstObject = Object.keys(objects)[0];
   const pivot = (objects[firstObject]?.formerCenter ?? objects[firstObject]?.center ?? { x: 0, y: 0, z: 0 }) as Vec3;
 
-  const format: DragonfruitImportFormat = {
+  const format: EmitFormat = {
     version: 1,
     meta: { source: 'lys_conversion', objectCenter: pivot, updatedAt: Date.now() },
     roots: [], trunks: [], branches: [], leaves: [], twigs: [], sticks: [], braces: [], knots: [], kickstands: [],

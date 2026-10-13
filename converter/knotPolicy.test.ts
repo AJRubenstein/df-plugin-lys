@@ -51,7 +51,7 @@ describe('knotPolicy — position', () => {
   });
 
   it('keeps an authored point clamped past the host tip, and says the t is out of segment', () => {
-    const decision = knot({ attachPoint: { x: 5, y: 0, z: 31 }, authoredTip: { x: 5, y: 0, z: 33 } });
+    const decision = knot({ attachPoint: { x: 5, y: 0, z: 31 } });
 
     assert.ok(decision);
     assert.equal(decision.chose, 'authored');

@@ -21,6 +21,7 @@ import { emitSupportGraph } from '../converter/graphEmit';
 import { createDefaultSettings } from '@/supports/Settings';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { snapshotOf, type FormatLike } from './snapshotFormat';
+import type { LysData } from '../converter/types';
 
 interface Vec3Like { x: number; y: number; z: number }
 interface ObjectLike {
@@ -31,9 +32,9 @@ interface ObjectLike {
   rotation?: Vec3Like;
   scale?: Vec3Like;
 }
-interface SceneLike {
+type SceneLike = LysData & {
   objects?: { present?: { byId?: Record<string, ObjectLike> } };
-}
+};
 interface ParsedScene {
   sceneData: SceneLike;
   geometry: THREE.BufferGeometry;

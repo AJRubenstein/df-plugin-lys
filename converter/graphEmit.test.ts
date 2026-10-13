@@ -189,7 +189,7 @@ describe('graphEmit — trunk', () => {
     const trunk = format.trunks[0];
     assert.equal(trunk.segments[0].diameter, 2);
     assert.equal(trunk.segments[0].topJoint?.diameter, 2.1);
-    assert.equal(trunk.contactCone.profile.bodyDiameterMm, 2);
+    assert.equal(trunk.contactCone?.profile.bodyDiameterMm, 2);
   });
 });
 

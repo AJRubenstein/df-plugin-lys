@@ -80,7 +80,7 @@ describe('supportGraph.readLysNodes', () => {
 
   it('treats a blank or absent ref as a free end, and accepts a numeric id', () => {
     const data = sceneOf({
-      s1: support({ id: 's1', parentBaseId: '   ', parentTipId: 5 }),
+      s1: support({ id: 's1', parentBaseId: '   ', parentTipId: 5 as unknown as string }),
     });
 
     const [node] = readLysNodes(data).nodes;
@@ -151,7 +151,7 @@ describe('supportGraph.buildSupportGraph', () => {
   it('throws on a dangling ref, naming it', () => {
     const data = sceneOf({ a: support({ id: 'a', parentBaseId: 'ghost' }) });
 
-    assert.throws(() => buildSupportGraph(data), /dangling host ref.*a\.base -> ghost/s);
+    assert.throws(() => buildSupportGraph(data), /dangling host ref.*a\.base -> ghost/);
   });
 
   it('throws on a cycle', () => {
