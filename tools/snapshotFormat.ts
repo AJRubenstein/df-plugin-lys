@@ -24,7 +24,11 @@ export interface FormatLike {
   twigs?: EntityLike[];
   sticks?: EntityLike[];
   braces?: Array<{ startKnotId?: string; endKnotId?: string; profile?: { diameter?: number } }>;
-  kickstands?: Array<{ hostKnot?: { id?: string }; kickstand?: EntityLike }>;
+  kickstands?: Array<{
+    hostKnot?: { id?: string; pos?: Vec3Like };
+    root?: { transform?: { pos?: Vec3Like } };
+    kickstand?: EntityLike;
+  }>;
   knots?: Array<{ id: string; parentShaftId: string; t: number; pos?: Vec3Like; diameter?: number }>;
 }
 
@@ -39,6 +43,8 @@ export interface SupportSnapshot {
     danglingReferences: number;
     orphanKnots: number;
   };
+  /** Root, column top and host knot of each kickstand, in world space. */
+  kickstands: string[];
   warnings: string[];
   braces: string[];
 }
@@ -83,6 +89,15 @@ export function snapshotOf(format: FormatLike, warnings: string[]): SupportSnaps
     knotSites.set(key, (knotSites.get(key) ?? 0) + 1);
   }
 
+  const kickstands = (format.kickstands ?? [])
+    .map((kb) => {
+      const root = kb.root?.transform?.pos;
+      const host = kb.hostKnot?.pos;
+      const colTop = (kb.kickstand?.segments ?? [])[0]?.topJoint?.pos;
+      return `root=${qp(root)} colTop=${qp(colTop)} hostKnot=${qp(host)}`;
+    })
+    .sort();
+
   const referenced = new Set<string>();
   for (const b of format.braces ?? []) { if (b.startKnotId) referenced.add(b.startKnotId); if (b.endKnotId) referenced.add(b.endKnotId); }
   for (const b of format.branches ?? []) if (b.parentKnotId) referenced.add(b.parentKnotId);
@@ -107,6 +122,10 @@ export function snapshotOf(format: FormatLike, warnings: string[]): SupportSnaps
       danglingReferences: [...referenced].filter((id) => !knotById.has(id)).length,
       orphanKnots: (format.knots ?? []).filter((k) => !referenced.has(k.id)).length,
     },
+    // Where each kickstand stands and where it meets its host, in world space.
+    // The brace signatures below name a knot by its shaft and parameter, so a host
+    // knot that moves without changing either is invisible to them.
+    kickstands,
     warnings: warnings.map((w) => w.replace(/[0-9a-f-]{36}/g, '<id>')).sort(),
     braces,
   };
