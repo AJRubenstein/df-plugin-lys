@@ -244,13 +244,22 @@ export class LysConverter {
       shiftPos(stick.contactConeB?.pos);
     }
 
-    for (const knot of data.knots) {
+    // A kickstand's host knot is also filed in `knots`, as the same object, so
+    // knots move by id or that one moves twice.
+    const shiftedKnotIds = new Set<string>();
+    const shiftKnot = (knot?: { id?: string; pos: { x: number; y: number } }) => {
+      if (!knot?.pos) return;
+      const key = typeof knot.id === 'string' ? knot.id : null;
+      if (key && shiftedKnotIds.has(key)) return;
       shiftPos(knot.pos);
-    }
+      if (key) shiftedKnotIds.add(key);
+    };
+
+    for (const knot of data.knots) shiftKnot(knot);
 
     for (const kickstandBuild of data.kickstands || []) {
       shiftPos(kickstandBuild.root.transform?.pos);
-      shiftPos(kickstandBuild.hostKnot.pos);
+      shiftKnot(kickstandBuild.hostKnot);
       for (const seg of kickstandBuild.kickstand.segments) {
         shiftJoint(seg.bottomJoint);
         shiftJoint(seg.topJoint);
@@ -399,13 +408,22 @@ export class LysConverter {
       if (stick.contactConeB.surfaceNormal) rotDir(stick.contactConeB.surfaceNormal);
     }
 
-    for (const knot of data.knots) {
+    // A kickstand's host knot is also filed in `knots`, as the same object, so
+    // knots turn by id or that one turns twice.
+    const rotatedKnotIds = new Set<string>();
+    const rotKnot = (knot?: { id?: string; pos: { x: number; y: number; z: number } }) => {
+      if (!knot?.pos) return;
+      const key = typeof knot.id === 'string' ? knot.id : null;
+      if (key && rotatedKnotIds.has(key)) return;
       rotPos(knot.pos);
-    }
+      if (key) rotatedKnotIds.add(key);
+    };
+
+    for (const knot of data.knots) rotKnot(knot);
 
     for (const kickstandBuild of data.kickstands || []) {
       if (kickstandBuild.root.transform?.pos) rotPos(kickstandBuild.root.transform.pos);
-      if (kickstandBuild.hostKnot?.pos) rotPos(kickstandBuild.hostKnot.pos);
+      rotKnot(kickstandBuild.hostKnot);
       rotSegments(kickstandBuild.kickstand.segments);
     }
   }
