@@ -785,16 +785,19 @@ const knotSiteKey = (parentShaftId: string, pos: Vec3, diameter: number | undefi
 };
 
 /**
- * Register a knot someone else built (the kickstand builder), keeping its object
- * as-is. Returns the knot already at that site when there is one, so the caller
- * can repoint at it instead of adding a second knot to the same point.
+ * Claim a site for a knot someone else built (the kickstand builder), keeping its
+ * object as-is. Returns the knot already at that site when there is one, so the
+ * caller can repoint at it instead of adding a second knot to the same point.
+ *
+ * The knot is NOT filed in `knots`: a kickstand carries its host knot on the
+ * build, and the load path reads it from there. Filing it in both would hand the
+ * same object to every pass twice over.
  */
 function registerKnot(state: EmitState, knot: Knot): Knot {
   const key = knotSiteKey(knot.parentShaftId, knot.pos as Vec3, knot.diameter);
   const existing = state.knotsBySite.get(key);
   if (existing) return existing;
   state.knotsBySite.set(key, knot);
-  state.format.knots = [...state.format.knots, knot];
   return knot;
 }
 

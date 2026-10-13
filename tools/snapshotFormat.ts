@@ -53,7 +53,12 @@ const q = (n: number | undefined) => (typeof n === 'number' ? Math.round(n * 100
 const qp = (p: Vec3Like | undefined) => (p ? `${q(p.x)},${q(p.y)},${q(p.z)}` : null);
 
 export function snapshotOf(format: FormatLike, warnings: string[]): SupportSnapshot {
+  // A kickstand carries its host knot on the build rather than in `knots`, so the
+  // index spans both or every one of them reads as a dangling reference.
   const knotById = new Map((format.knots ?? []).map((k) => [k.id, k] as const));
+  for (const kb of format.kickstands ?? []) {
+    if (kb.hostKnot?.id && !knotById.has(kb.hostKnot.id)) knotById.set(kb.hostKnot.id, kb.hostKnot as never);
+  }
 
   // Shaft ids are generated per run, so name a segment by its own geometry.
   const shaftSig = new Map<string, string>();
