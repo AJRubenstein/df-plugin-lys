@@ -4,6 +4,7 @@ import type { Brace, Branch, DragonfruitImportFormat, Joint, Knot, Leaf, Roots, 
 import type { ContactDiskProfile } from '@/supports/SupportPrimitives/ContactCone/types';
 import type { SupportSettings } from '@/supports/Settings';
 import { getJointDiameter } from '@/supports/constants';
+import { isKickstandHostType, knotHostId } from '@/supports/supportTypeRegistry';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone';
 import { recomputeLeafContactConeAxisAndLength } from '@/supports/state';
 import { buildKickstandData } from '@/supports/SupportTypes/Kickstand/kickstandBuilder';
@@ -759,14 +760,16 @@ function emitBrace(state: EmitState, node: LysNode): void {
 
   // A knot on a tapered twig is sized by the twig's local diameter, not by one
   // shared brace diameter: on a tapered host the two ends genuinely differ.
-  const knotDiameterForHost = (host: HostSkeleton, twig: Twig | undefined, shafts: { parentShaftId: string; t: number }): number => {
-    if (host.kind !== 'twig' || !twig) return braceJointDiameter;
-    const local = resolveTwigDiameterAtSegmentT(twig, shafts.parentShaftId, shafts.t);
+  // Every other host keeps the brace's own joint diameter, which the load path
+  // preserves for a `braceImported` knot rather than resizing to the segment.
+  const knotDiameterForHost = (record: HostRecord, shafts: { parentShaftId: string; t: number }): number => {
+    if (record.skeleton.kind !== 'twig' || !record.twig) return braceJointDiameter;
+    const local = resolveTwigDiameterAtSegmentT(record.twig, shafts.parentShaftId, shafts.t);
     return local !== null && local > 0 ? twigJointDiameterForLocalDiameter(local) : braceJointDiameter;
   };
 
-  const knotA = knotAt(state, projA.parentShaftId, parameterOnSegment(pA, projA.segment), pA, knotDiameterForHost(hostA.skeleton, hostA.twig, projA), 'braceImported');
-  const knotB = knotAt(state, projB.parentShaftId, parameterOnSegment(pB, projB.segment), pB, knotDiameterForHost(hostB.skeleton, hostB.twig, projB), 'braceImported');
+  const knotA = knotAt(state, projA.parentShaftId, parameterOnSegment(pA, projA.segment), pA, knotDiameterForHost(hostA, projA), 'braceImported');
+  const knotB = knotAt(state, projB.parentShaftId, parameterOnSegment(pB, projB.segment), pB, knotDiameterForHost(hostB, projB), 'braceImported');
 
   const brace: Brace = {
     id: uuidv4(),
@@ -776,6 +779,16 @@ function emitBrace(state: EmitState, node: LysNode): void {
     profile: { diameter: braceDiameter },
   };
   state.format.braces.push(brace);
+
+  // A brace spans its two knots and carries no segment, so it publishes that span
+  // under the pseudo-shaft id the runtime parses — braces do host other braces.
+  state.hosts.set(node.id, {
+    skeleton: {
+      kind: 'brace',
+      segments: [{ id: knotHostId('brace', brace.id), start: knotA.pos as Vec3, end: knotB.pos as Vec3 }],
+    },
+    segmentDiameter: new Map([[knotHostId('brace', brace.id), braceDiameter]]),
+  });
   state.diagnostics.emitted.brace = (state.diagnostics.emitted.brace ?? 0) + 1;
 }
 
@@ -844,7 +857,7 @@ function emitKickstand(state: EmitState, node: LysNode): void {
     return;
   }
   const hostKind = record.skeleton.kind;
-  if (hostKind === 'twig' || hostKind === 'stick' || hostKind === 'kickstand') {
+  if (!isKickstandHostType(hostKind)) {
     state.diagnostics.skipped.push(`${node.id}: kickstand cannot attach to a ${hostKind} host`);
     return;
   }

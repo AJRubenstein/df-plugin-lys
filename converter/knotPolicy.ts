@@ -25,7 +25,7 @@ export interface HostSegment {
 }
 
 export interface HostSkeleton {
-  kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand';
+  kind: 'trunk' | 'branch' | 'twig' | 'stick' | 'kickstand' | 'brace';
   segments: HostSegment[];
 }
 
