@@ -463,7 +463,8 @@ function emitTrunk(state: EmitState, node: LysNode): void {
   const root: Roots = {
     id: rootId,
     modelId: owner,
-    transform: { pos: { x: baseRefWorld.x, y: baseRefWorld.y, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+    // The plate sits a drop below the space the shaft is built in.
+    transform: { pos: { x: baseRefWorld.x, y: baseRefWorld.y, z: 0 - frame.plateDropZ }, rot: { x: 0, y: 0, z: 0, w: 1 } },
     diameter: rootDefaults.diameterMm,
     diskHeight,
     coneHeight,
