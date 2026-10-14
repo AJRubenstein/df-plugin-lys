@@ -758,14 +758,16 @@ function emitBrace(state: EmitState, node: LysNode): void {
   const braceDiameter = positive(tipDiameter) ?? positive(baseTipDiameter) ?? positive(joinDiameter) ?? 0.5;
   const braceJointDiameter = getJointDiameter(braceDiameter);
 
-  // A knot on a tapered twig is sized by the twig's local diameter, not by one
-  // shared brace diameter: on a tapered host the two ends genuinely differ.
-  // Every other host keeps the brace's own joint diameter, which the load path
-  // preserves for a `braceImported` knot rather than resizing to the segment.
+  // A brace renders at its knots' diameters, capped by its own profile, so each
+  // knot is sized by the shaft it lands on: the brace then tapers to meet each
+  // host at that host's thickness. A tapered twig is read at the attach parameter.
   const knotDiameterForHost = (record: HostRecord, shafts: { parentShaftId: string; t: number }): number => {
-    if (record.skeleton.kind !== 'twig' || !record.twig) return braceJointDiameter;
-    const local = resolveTwigDiameterAtSegmentT(record.twig, shafts.parentShaftId, shafts.t);
-    return local !== null && local > 0 ? twigJointDiameterForLocalDiameter(local) : braceJointDiameter;
+    if (record.skeleton.kind === 'twig' && record.twig) {
+      const local = resolveTwigDiameterAtSegmentT(record.twig, shafts.parentShaftId, shafts.t);
+      if (local !== null && local > 0) return twigJointDiameterForLocalDiameter(local);
+    }
+    const hostShaft = record.segmentDiameter.get(shafts.parentShaftId);
+    return hostShaft !== undefined && hostShaft > 0 ? getJointDiameter(hostShaft) : braceJointDiameter;
   };
 
   const knotA = knotAt(state, projA.parentShaftId, parameterOnSegment(pA, projA.segment), pA, knotDiameterForHost(hostA, projA), 'braceImported');

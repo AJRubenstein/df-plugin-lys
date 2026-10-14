@@ -603,8 +603,15 @@ describe('LysConverter', () => {
             'Imported brace start knot should be marked for brace-uniform normalization');
         assert.strictEqual(endKnot._importHint, 'braceImported',
             'Imported brace end knot should be marked for brace-uniform normalization');
-        assert.ok(Math.abs((startKnot.diameter as number) - (endKnot.diameter as number)) < 1e-6,
-            'Imported brace host knots should start with a uniform joint diameter');
+        // A brace renders at its knots' diameters, so each knot is sized by the shaft
+        // it lands on: s1 authors a 1.2mm pillar, s3 authors none and takes the
+        // default, and the brace tapers between them.
+        const s1Knot = [startKnot, endKnot].find((k) => Math.abs(k.pos.x) < 1)!;
+        const s3Knot = [startKnot, endKnot].find((k) => Math.abs(k.pos.x - 20) < 1)!;
+        assert.ok(Math.abs((s1Knot.diameter as number) - (1.2 + 0.1)) < 1e-6,
+            'Brace knot on s1 should take the 1.2mm pillar joint diameter');
+        assert.ok(Math.abs((s3Knot.diameter as number) - (s1Knot.diameter as number)) > 1e-6,
+            'Brace knots on differently sized hosts should differ, so the brace tapers');
     });
 
     it('should keep authored brace endpoint positions when explicit parentBaseId/parentTipId are provided', () => {
