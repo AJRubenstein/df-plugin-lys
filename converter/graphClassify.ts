@@ -1,4 +1,5 @@
 import type { HostEnd, LysNode, LysSupportGraph } from './supportGraph';
+import { coneLengthMm } from './helpers';
 
 /**
  * Classification from the authored graph.
@@ -57,9 +58,6 @@ export function hasUsableNormal(v: LysNode['baseNormal']): boolean {
 const distance = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number =>
   Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
-/** `pickContactTipSettings` + `length || default`: the cone length this node authors. */
-const coneLengthOf = (node: LysNode, defaultTipLengthMm: number): number =>
-  node.settings?.tip?.length || node.settings?.baseTip?.length || defaultTipLengthMm;
 
 export function classifySupportGraph(graph: LysSupportGraph, options: ClassifyOptions): NodeClassification[] {
   const groundedZMm = options.groundedZMm ?? 0.2;
@@ -93,7 +91,7 @@ export function classifySupportGraph(graph: LysSupportGraph, options: ClassifyOp
       const contactEnd: HostEnd = attachEnd === 'base' ? 'tip' : 'base';
       const attachPoint = attachEnd === 'base' ? node.base : node.tip;
       const contactPoint = contactEnd === 'base' ? node.base : node.tip;
-      const shaftMm = distance(attachPoint, contactPoint) - coneLengthOf(node, options.defaultTipLengthMm);
+      const shaftMm = distance(attachPoint, contactPoint) - coneLengthMm(node, options.defaultTipLengthMm);
 
       // `type` is not a discriminator: the old guard `!Number.isFinite(type) || type === 0 || type === 1`
       // passes 0, 1 and every non-numeric value, and the corpus authors nothing else.

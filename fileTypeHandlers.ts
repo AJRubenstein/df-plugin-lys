@@ -5,6 +5,8 @@ import type { DragonfruitImportFormat, Joint, Knot } from '@/supports/types';
 import { LysParser } from './LysParser';
 import type { LysData, LysObject, LysSupport } from './converter/types';
 import { LysConverter } from './LysConverter';
+import { normLysObjectId } from './converter/helpers';
+import { visitSupportGeometry } from './converter/supportTraversal';
 import { createDefaultSettings } from '@/supports/Settings/types';
 import { computeLowestZ } from '@/utils/geometry';
 import { eulerFromGlobalEuler, quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
@@ -60,91 +62,7 @@ function normalizeLysRotation(
  */
 function applySupportZOffset(importData: DragonfruitImportFormat | null | undefined, deltaZ: number) {
   if (!importData || !Number.isFinite(deltaZ) || Math.abs(deltaZ) < 1e-6) return;
-
-  const shiftedJointIds = new Set<string>();
-  const shiftJoint = (joint: Joint | null | undefined) => {
-    if (!joint?.pos) return;
-    const key = typeof joint.id === 'string' ? joint.id : null;
-    if (key && shiftedJointIds.has(key)) return;
-    joint.pos.z += deltaZ;
-    if (key) shiftedJointIds.add(key);
-  };
-
-  for (const trunk of importData.trunks || []) {
-    for (const seg of trunk?.segments || []) {
-      shiftJoint(seg?.bottomJoint);
-      shiftJoint(seg?.topJoint);
-      if (seg?.type === 'bezier') {
-        if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
-        if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
-      }
-    }
-    if (trunk?.contactCone?.pos) trunk.contactCone.pos.z += deltaZ;
-  }
-
-  for (const branch of importData.branches || []) {
-    for (const seg of branch?.segments || []) {
-      shiftJoint(seg?.bottomJoint);
-      shiftJoint(seg?.topJoint);
-      if (seg?.type === 'bezier') {
-        if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
-        if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
-      }
-    }
-    if (branch?.contactCone?.pos) branch.contactCone.pos.z += deltaZ;
-  }
-
-  for (const leaf of importData.leaves || []) {
-    if (leaf?.contactCone?.pos) leaf.contactCone.pos.z += deltaZ;
-  }
-
-  for (const twig of importData.twigs || []) {
-    for (const seg of twig?.segments || []) {
-      shiftJoint(seg?.bottomJoint);
-      shiftJoint(seg?.topJoint);
-      if (seg?.type === 'bezier') {
-        if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
-        if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
-      }
-    }
-    if (twig?.contactDiskA?.pos) twig.contactDiskA.pos.z += deltaZ;
-    if (twig?.contactDiskB?.pos) twig.contactDiskB.pos.z += deltaZ;
-  }
-
-  for (const stick of importData.sticks || []) {
-    for (const seg of stick?.segments || []) {
-      shiftJoint(seg?.bottomJoint);
-      shiftJoint(seg?.topJoint);
-      if (seg?.type === 'bezier') {
-        if (seg.controlPoint1) seg.controlPoint1.z += deltaZ;
-        if (seg.controlPoint2) seg.controlPoint2.z += deltaZ;
-      }
-    }
-    if (stick?.contactConeA?.pos) stick.contactConeA.pos.z += deltaZ;
-    if (stick?.contactConeB?.pos) stick.contactConeB.pos.z += deltaZ;
-  }
-
-  const shiftedKnotIds = new Set<string>();
-  const shiftKnot = (knot: Knot | null | undefined) => {
-    if (!knot?.pos) return;
-    const key = typeof knot.id === 'string' ? knot.id : null;
-    if (key && shiftedKnotIds.has(key)) return;
-    knot.pos.z += deltaZ;
-    if (key) shiftedKnotIds.add(key);
-  };
-
-  for (const knot of importData.knots || []) shiftKnot(knot);
-
-  // A kickstand bundles its own root and host knot. The host knot is also filed in
-  // `knots`, as the same object, so it is shifted by id or it moves twice.
-  for (const build of importData.kickstands || []) {
-    for (const seg of build?.kickstand?.segments || []) {
-      shiftJoint(seg?.bottomJoint);
-      shiftJoint(seg?.topJoint);
-    }
-    if (build?.root?.transform?.pos) build.root.transform.pos.z += deltaZ;
-    shiftKnot(build?.hostKnot);
-  }
+  visitSupportGeometry(importData, { position: (pos) => { pos.z += deltaZ; } });
 }
 
 function summarizeImportSupportData(importData: ReturnType<typeof LysConverter.convert> | null | undefined) {
@@ -312,13 +230,6 @@ export function resolveObjectGeometryMatch(
   }
 
   return { geometry: null, matchSource: 'none' };
-}
-
-/** Normalize an LYS objectId field (may be string or number) to a string, or null. */
-function normLysObjectId(val: unknown): string | null {
-  if (typeof val === 'string' && val.trim()) return val.trim();
-  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
-  return null;
 }
 
 /**

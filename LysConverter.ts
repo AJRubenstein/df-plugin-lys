@@ -13,6 +13,8 @@ import { MeshBVH } from 'three-mesh-bvh';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { emitSupportGraph } from './converter/graphEmit';
 import { LysData, LysHollowing } from './converter/types';
+import { normLysObjectId } from './converter/helpers';
+import { visitSupportGeometry } from './converter/supportTraversal';
 
 /**
  * Resolve the inward drill direction for a tilted hole whose cylinder axis lies
@@ -70,12 +72,6 @@ function resolveDrillInward(
 }
 
 /** Normalize an LYS objectId field (may be string or number) to a string, or null. */
-function normLysObjectId(val: unknown): string | null {
-  if (typeof val === 'string' && val.trim()) return val.trim();
-  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
-  return null;
-}
-
 /** Base64-encode a typed array for storage in meshModifiers. */
 function bytesToBase64(bytes: Uint8Array): string {
   if (typeof btoa === 'function') {
@@ -170,105 +166,9 @@ export class LysConverter {
     if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY)) return;
     if (Math.abs(offsetX) < 1e-8 && Math.abs(offsetY) < 1e-8) return;
 
-    const shiftedJointIds = new Set<string>();
-
-    const shiftPos = (pos?: { x: number; y: number }) => {
-      if (!pos) return;
-      pos.x += offsetX;
-      pos.y += offsetY;
-    };
-
-    const shiftJoint = (joint?: Joint) => {
-      if (!joint?.pos) return;
-      if (shiftedJointIds.has(joint.id)) return;
-      joint.pos.x += offsetX;
-      joint.pos.y += offsetY;
-      shiftedJointIds.add(joint.id);
-    };
-
-    for (const root of data.roots) {
-      shiftPos(root.transform?.pos);
-    }
-
-    for (const trunk of data.trunks) {
-      for (const seg of trunk.segments) {
-        shiftJoint(seg.bottomJoint);
-        shiftJoint(seg.topJoint);
-        if (seg.type === 'bezier') {
-          shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
-          shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
-        }
-      }
-      shiftPos(trunk.contactCone?.pos);
-    }
-
-    for (const branch of data.branches) {
-      for (const seg of branch.segments) {
-        shiftJoint(seg.bottomJoint);
-        shiftJoint(seg.topJoint);
-        if (seg.type === 'bezier') {
-          shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
-          shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
-        }
-      }
-      shiftPos(branch.contactCone?.pos);
-    }
-
-    for (const leaf of data.leaves) {
-      shiftPos(leaf.contactCone?.pos);
-    }
-
-    for (const twig of data.twigs || []) {
-      for (const seg of twig.segments) {
-        shiftJoint(seg.bottomJoint);
-        shiftJoint(seg.topJoint);
-        if (seg.type === 'bezier') {
-          shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
-          shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
-        }
-      }
-      shiftPos(twig.contactDiskA?.pos);
-      shiftPos(twig.contactDiskB?.pos);
-    }
-
-    for (const stick of data.sticks || []) {
-      for (const seg of stick.segments) {
-        shiftJoint(seg.bottomJoint);
-        shiftJoint(seg.topJoint);
-        if (seg.type === 'bezier') {
-          shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
-          shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
-        }
-      }
-      shiftPos(stick.contactConeA?.pos);
-      shiftPos(stick.contactConeB?.pos);
-    }
-
-    // A kickstand's host knot is also filed in `knots`, as the same object, so
-    // knots move by id or that one moves twice.
-    const shiftedKnotIds = new Set<string>();
-    const shiftKnot = (knot?: { id?: string; pos: { x: number; y: number } }) => {
-      if (!knot?.pos) return;
-      const key = typeof knot.id === 'string' ? knot.id : null;
-      if (key && shiftedKnotIds.has(key)) return;
-      shiftPos(knot.pos);
-      if (key) shiftedKnotIds.add(key);
-    };
-
-    for (const knot of data.knots) shiftKnot(knot);
-
-    for (const kickstandBuild of data.kickstands || []) {
-      shiftPos(kickstandBuild.root.transform?.pos);
-      shiftKnot(kickstandBuild.hostKnot);
-      for (const seg of kickstandBuild.kickstand.segments) {
-        shiftJoint(seg.bottomJoint);
-        shiftJoint(seg.topJoint);
-        if (seg.type === 'bezier') {
-          shiftPos(seg.controlPoint1 as { x: number; y: number } | undefined);
-          shiftPos(seg.controlPoint2 as { x: number; y: number } | undefined);
-        }
-      }
-    }
+    visitSupportGeometry(data, {
+      position: (pos) => { pos.x += offsetX; pos.y += offsetY; },
+    });
   }
 
   /**
@@ -321,111 +221,22 @@ export class LysConverter {
     const cosZ = Math.cos(rotZRad);
     const sinZ = Math.sin(rotZRad);
 
-    // Position rotation around world-space pivot in XY plane.
-    const rotPos = (pos: { x: number; y: number; z?: number }) => {
-      const dx = pos.x - px;
-      const dy = pos.y - py;
-      pos.x = dx * cosZ - dy * sinZ + px;
-      pos.y = dx * sinZ + dy * cosZ + py;
-    };
-
-    // Direction vectors are rotated about origin (no pivot translation).
-    const rotDir = (dir: { x: number; y: number; z: number }) => {
-      const nx = dir.x * cosZ - dir.y * sinZ;
-      const ny = dir.x * sinZ + dir.y * cosZ;
-      dir.x = nx;
-      dir.y = ny;
-    };
-
-    // Joints can be shared across segments; rotate each joint only once.
-    const rotatedJointIds = new Set<string>();
-    const rotJoint = (joint?: { id?: string; pos: { x: number; y: number; z: number } }) => {
-      if (!joint?.pos) return;
-      const key = typeof joint.id === 'string' ? joint.id : null;
-      if (key && rotatedJointIds.has(key)) return;
-      rotPos(joint.pos);
-      if (key) rotatedJointIds.add(key);
-    };
-
-    const rotSegments = (segments: import('@/supports/types').Segment[]) => {
-      for (const seg of segments) {
-        rotJoint(seg.topJoint);
-        rotJoint(seg.bottomJoint);
-        if (seg.type === 'bezier') {
-          rotPos(seg.controlPoint1);
-          rotPos(seg.controlPoint2);
-          rotDir(seg.startTangent);
-          rotDir(seg.endTangent);
-        }
-      }
-    };
-
-    for (const root of data.roots) {
-      if (root.transform?.pos) rotPos(root.transform.pos);
-    }
-
-    for (const trunk of data.trunks) {
-      rotSegments(trunk.segments);
-      if (trunk.contactCone) {
-        rotPos(trunk.contactCone.pos);
-        rotDir(trunk.contactCone.normal);
-        if (trunk.contactCone.surfaceNormal) rotDir(trunk.contactCone.surfaceNormal);
-      }
-    }
-
-    for (const branch of data.branches) {
-      rotSegments(branch.segments);
-      if (branch.contactCone) {
-        rotPos(branch.contactCone.pos);
-        rotDir(branch.contactCone.normal);
-        if (branch.contactCone.surfaceNormal) rotDir(branch.contactCone.surfaceNormal);
-      }
-    }
-
-    for (const leaf of data.leaves) {
-      rotPos(leaf.contactCone.pos);
-      rotDir(leaf.contactCone.normal);
-      if (leaf.contactCone.surfaceNormal) rotDir(leaf.contactCone.surfaceNormal);
-    }
-
-    for (const twig of data.twigs || []) {
-      rotSegments(twig.segments);
-      rotPos(twig.contactDiskA.pos);
-      rotDir(twig.contactDiskA.surfaceNormal);
-      rotDir(twig.contactDiskA.coneAxis);
-      rotPos(twig.contactDiskB.pos);
-      rotDir(twig.contactDiskB.surfaceNormal);
-      rotDir(twig.contactDiskB.coneAxis);
-    }
-
-    for (const stick of data.sticks || []) {
-      rotSegments(stick.segments);
-      rotPos(stick.contactConeA.pos);
-      rotDir(stick.contactConeA.normal);
-      if (stick.contactConeA.surfaceNormal) rotDir(stick.contactConeA.surfaceNormal);
-      rotPos(stick.contactConeB.pos);
-      rotDir(stick.contactConeB.normal);
-      if (stick.contactConeB.surfaceNormal) rotDir(stick.contactConeB.surfaceNormal);
-    }
-
-    // A kickstand's host knot is also filed in `knots`, as the same object, so
-    // knots turn by id or that one turns twice.
-    const rotatedKnotIds = new Set<string>();
-    const rotKnot = (knot?: { id?: string; pos: { x: number; y: number; z: number } }) => {
-      if (!knot?.pos) return;
-      const key = typeof knot.id === 'string' ? knot.id : null;
-      if (key && rotatedKnotIds.has(key)) return;
-      rotPos(knot.pos);
-      if (key) rotatedKnotIds.add(key);
-    };
-
-    for (const knot of data.knots) rotKnot(knot);
-
-    for (const kickstandBuild of data.kickstands || []) {
-      if (kickstandBuild.root.transform?.pos) rotPos(kickstandBuild.root.transform.pos);
-      rotKnot(kickstandBuild.hostKnot);
-      rotSegments(kickstandBuild.kickstand.segments);
-    }
+    visitSupportGeometry(data, {
+      // Positions turn about the pivot; Z is untouched.
+      position: (pos) => {
+        const dx = pos.x - px;
+        const dy = pos.y - py;
+        pos.x = dx * cosZ - dy * sinZ + px;
+        pos.y = dx * sinZ + dy * cosZ + py;
+      },
+      // Directions turn about the origin, with no pivot translation.
+      direction: (dir) => {
+        const nx = dir.x * cosZ - dir.y * sinZ;
+        const ny = dir.x * sinZ + dir.y * cosZ;
+        dir.x = nx;
+        dir.y = ny;
+      },
+    });
   }
 
   /**

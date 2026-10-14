@@ -13,7 +13,7 @@ import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtils';
 import { createContactAssembly } from './contactAssembly';
-import { pickContactTipSettings, pickStickEndpointTipSettings, gridColumnHeightMm, inferLeafTipEndpoint, pickLeafEndpointDiameter } from './helpers';
+import { pickContactTipSettings, pickEndpointTipSettings, pickDiskStandoff, gridColumnHeightMm, inferLeafTipEndpoint, pickLeafEndpointDiameter } from './helpers';
 import { decideKnot, parameterOnSegment, projectOntoSkeleton, type HostSegment, type HostSkeleton } from './knotPolicy';
 import type { LysData, LysObject, LysTipSettings } from './types';
 import { classifySupportGraph, hasUsableNormal, type ClassifyOptions, type SupportClass } from './graphClassify';
@@ -23,14 +23,9 @@ import { buildSupportGraph, emissionOrder, type HostEnd, type LysNode } from './
  * The emit pass: one walk of the graph in host-before-child order, each node
  * built once.
  *
- * Only the classes with no host are wired so far (twig, stick): they resolve
- * against no host geometry, so they can be checked against the acceptance
- * baselines before the host-resolving classes land. A class present in the graph
- * but not yet built is reported in `notYetWired` — never silently dropped.
- *
- * The hosted classes follow the same shape, with one addition: they must publish
- * the DragonFruit skeleton their children's knots land on, which is the frame
- * mismatch of REBUILD_SCOPE section 1. That is why the knot policy lands first.
+ * A hosted class resolves against its host's published DragonFruit skeleton, so
+ * a host is always emitted before its children. A class present in the graph
+ * that no emitter builds is reported in `notYetWired` — never silently dropped.
  */
 
 /** The per-object frame a node's authored coordinates are read in. */
@@ -236,6 +231,19 @@ function frameFor(state: EmitState, owner: string): ObjectFrame {
   return frame;
 }
 
+/** True when a transformed normal is present and not degenerate. */
+function isUsableNormalVec(v: THREE.Vector3 | null): v is THREE.Vector3 {
+  return !!v && v.lengthSq() > 1e-8;
+}
+
+/** The ends whose transformed normal is missing or degenerate. */
+function unusableNormalEnds(baseNormal: THREE.Vector3 | null, tipNormal: THREE.Vector3 | null): string[] {
+  const ends: string[] = [];
+  if (!isUsableNormalVec(baseNormal)) ends.push('base');
+  if (!isUsableNormalVec(tipNormal)) ends.push('tip');
+  return ends;
+}
+
 /**
  * A floating two-cone stick: one segment between the two socket joints, a cone
  * at each end. Ported from the current converter's stick path so the shaft
@@ -250,13 +258,14 @@ function emitStick(state: EmitState, node: LysNode): void {
   const baseNormal = node.baseNormal ? frame.transformNormal(node.baseNormal) : null;
   const tipNormal = node.tipNormal ? frame.transformNormal(node.tipNormal) : null;
 
-  if (!baseNormal || baseNormal.lengthSq() <= 1e-8 || !tipNormal || tipNormal.lengthSq() <= 1e-8) {
-    state.diagnostics.skipped.push(`${node.id}: stick without a usable normal at the ${baseNormal ? 'tip' : 'base'} end`);
+  if (!isUsableNormalVec(baseNormal) || !isUsableNormalVec(tipNormal)) {
+    const unusableEnds = unusableNormalEnds(baseNormal, tipNormal);
+    state.diagnostics.skipped.push(`${node.id}: stick without a usable normal at the ${unusableEnds.join(' and ')} end`);
     return;
   }
 
-  const baseEndpoint = pickStickEndpointTipSettings(node, 'base');
-  const tipEndpoint = pickStickEndpointTipSettings(node, 'tip');
+  const baseEndpoint = pickEndpointTipSettings(node, 'base');
+  const tipEndpoint = pickEndpointTipSettings(node, 'tip');
   const tipDefaults = state.settings.tip;
 
   const { socketJoint: socketJointA, contactCone: contactConeA } = createContactAssembly(
@@ -281,7 +290,7 @@ function emitStick(state: EmitState, node: LysNode): void {
     topJoint: socketJointB,
   };
   const stick: Stick = { id: uuidv4(), modelId: owner, segments: [segment], contactConeA, contactConeB };
-  state.format.sticks = [...state.format.sticks, stick];
+  state.format.sticks.push(stick);
   state.hosts.set(node.id, {
     skeleton: { kind: 'stick', segments: [{ id: segment.id, start: socketJointA.pos, end: socketJointB.pos }] },
     segmentDiameter: new Map([[segment.id, shaftDiameter]]),
@@ -315,8 +324,9 @@ function emitTwig(state: EmitState, node: LysNode): void {
   const baseNormal = node.baseNormal ? frame.transformNormal(node.baseNormal) : null;
   const tipNormal = node.tipNormal ? frame.transformNormal(node.tipNormal) : null;
 
-  if (!baseNormal || baseNormal.lengthSq() <= 1e-8 || !tipNormal || tipNormal.lengthSq() <= 1e-8) {
-    state.diagnostics.skipped.push(`${node.id}: twig without a usable normal at the ${baseNormal ? 'tip' : 'base'} end`);
+  if (!isUsableNormalVec(baseNormal) || !isUsableNormalVec(tipNormal)) {
+    const unusableEnds = unusableNormalEnds(baseNormal, tipNormal);
+    state.diagnostics.skipped.push(`${node.id}: twig without a usable normal at the ${unusableEnds.join(' and ')} end`);
     return;
   }
 
@@ -334,14 +344,12 @@ function emitTwig(state: EmitState, node: LysNode): void {
   const baseSurfaceVec = raycastSurfaceNormal(frame.meshFramePoint(node.base), baseNormal, frame.meshPivotShift, frame.mesh).normal;
   const tipSurfaceVec = raycastSurfaceNormal(frame.meshFramePoint(node.tip), tipNormal, frame.meshPivotShift, frame.mesh).normal;
 
-  const contactDiameterA = pickContactDiameterMm(pickStickEndpointTipSettings(node, 'base'), tipDefaults);
-  const contactDiameterB = pickContactDiameterMm(pickStickEndpointTipSettings(node, 'tip'), tipDefaults);
+  const contactDiameterA = pickContactDiameterMm(pickEndpointTipSettings(node, 'base'), tipDefaults);
+  const contactDiameterB = pickContactDiameterMm(pickEndpointTipSettings(node, 'tip'), tipDefaults);
 
   const diskProfile: ContactDiskProfile = {
     type: 'disk',
-    diskThicknessMm: tipDefaults.diskThicknessMm ?? 0.1,
-    maxStandoffMm: tipDefaults.maxStandoffMm ?? 1.5,
-    standoffAngleThreshold: tipDefaults.standoffAngleThreshold ?? Math.PI / 4,
+    ...pickDiskStandoff(tipDefaults),
   };
 
   const jointDiameterA = twigJointDiameterForLocalDiameter(contactDiameterA);
@@ -409,7 +417,7 @@ function emitTwig(state: EmitState, node: LysNode): void {
       contactDiameterMm: contactDiameterB,
     },
   };
-  state.format.twigs = [...state.format.twigs, twig];
+  state.format.twigs.push(twig);
   // A twig's skeleton is its JOINT line, not its disk centres: the runtime knot
   // host and the taper math both resolve through the joints.
   state.hosts.set(node.id, {
@@ -494,8 +502,8 @@ function emitTrunk(state: EmitState, node: LysNode): void {
   ];
   const trunk: Trunk = { id: uuidv4(), modelId: owner, rootId, segments, contactCone };
 
-  state.format.roots = [...state.format.roots, root];
-  state.format.trunks = [...state.format.trunks, trunk];
+  state.format.roots.push(root);
+  state.format.trunks.push(trunk);
   // The trunk's skeleton starts at the ROOT TOP, not at the authored base: the
   // root's collar occupies the span between them.
   state.hosts.set(node.id, {
@@ -634,7 +642,7 @@ function emitHosted(state: EmitState, node: LysNode): void {
     }
 
     const leaf: Leaf = { id: uuidv4(), modelId: owner, parentKnotId: knot.id, contactCone };
-    state.format.leaves = [...state.format.leaves, leaf];
+    state.format.leaves.push(leaf);
     state.diagnostics.emitted.leaf = (state.diagnostics.emitted.leaf ?? 0) + 1;
     return;
   }
@@ -654,7 +662,7 @@ function emitHosted(state: EmitState, node: LysNode): void {
     : [{ id: uuidv4(), type: 'straight', diameter: shaftDiameter, bottomJoint: undefined, topJoint: socketJoint }];
 
   const branch: Branch = { id: uuidv4(), modelId: owner, parentKnotId: knot.id, segments, contactCone };
-  state.format.branches = [...state.format.branches, branch];
+  state.format.branches.push(branch);
 
   // Publish so a grandchild can attach: this chain starts at the branch's knot.
   let cursor = knotPos;
@@ -766,7 +774,7 @@ function emitBrace(state: EmitState, node: LysNode): void {
     endKnotId: knotB.id,
     profile: { diameter: braceDiameter },
   };
-  state.format.braces = [...state.format.braces, brace];
+  state.format.braces.push(brace);
   state.diagnostics.emitted.brace = (state.diagnostics.emitted.brace ?? 0) + 1;
 }
 
@@ -816,7 +824,7 @@ function knotAt(state: EmitState, parentShaftId: string, t: number, pos: Vec3, d
     ...(hint ? { _importHint: hint } : {}),
   };
   state.knotsBySite.set(knotSiteKey(parentShaftId, pos, diameter), knot);
-  state.format.knots = [...state.format.knots, knot];
+  state.format.knots.push(knot);
   return knot;
 }
 
@@ -896,7 +904,7 @@ function emitKickstand(state: EmitState, node: LysNode): void {
     build.kickstand.hostKnotId = hostKnot.id;
     build.hostKnot = hostKnot;
   }
-  state.format.kickstands = [...state.format.kickstands, build];
+  state.format.kickstands.push(build);
 
   // Publish, so a brace can attach to the column — girder members do.
   let cursor: Vec3 = {
