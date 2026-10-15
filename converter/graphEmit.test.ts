@@ -241,7 +241,7 @@ describe('graphEmit — brace and kickstand', () => {
     assert.equal(format.braces.length, 1);
   });
 
-  it('refuses a kickstand whose host is a twig, naming the reason', () => {
+  it('roots a kickstand on a twig host, which carries a shaft to ride', () => {
     const { format, diagnostics } = emitSupportGraph(
       sceneOf({
         twigHost: floating({ id: 'twigHost', objectIdTip: 'o1', tip: { x: 0, y: 0, z: 14 } }),
@@ -250,8 +250,10 @@ describe('graphEmit — brace and kickstand', () => {
       settings as never,
     );
 
-    assert.equal(format.kickstands.length, 0);
-    assert.match(diagnostics.skipped.join(' '), /column: kickstand cannot attach to a twig host/);
+    assert.deepEqual(diagnostics.skipped, []);
+    assert.equal(format.kickstands.length, 1);
+    // Grounded on the plate, reaching up to the twig floating in the print.
+    assert.equal(format.kickstands[0].root.transform.pos.z, 0);
   });
 });
 
