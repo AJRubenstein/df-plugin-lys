@@ -198,6 +198,8 @@ interface EmitState {
    * fanned onto a twig with six siblings got seven knots at one point.
    */
   knotsBySite: Map<string, Knot>;
+  /** Every node id the graph holds, so a ref to a deleted support reads as such. */
+  nodeIds: Set<string>;
   mesh?: THREE.Mesh;
   diagnostics: EmitDiagnostics;
 }
@@ -235,6 +237,17 @@ function frameFor(state: EmitState, owner: string): ObjectFrame {
 /** True when a transformed normal is present and not degenerate. */
 function isUsableNormalVec(v: THREE.Vector3 | null): v is THREE.Vector3 {
   return !!v && v.lengthSq() > 1e-8;
+}
+
+/**
+ * Why a child could not reach its host: a ref the file never defines is a stale
+ * reference in the source, not a conversion failure.
+ */
+function missingHostReason(state: EmitState, hostId: string | null | undefined): string {
+  if (!hostId) return 'names no host';
+  return state.nodeIds.has(hostId)
+    ? `host ${hostId} was not emitted`
+    : `host ${hostId} is not in the file`;
 }
 
 /** The ends whose transformed normal is missing or degenerate. */
@@ -559,7 +572,7 @@ function emitHosted(state: EmitState, node: LysNode): void {
   }
   const record = state.hosts.get(hostId);
   if (!record) {
-    state.diagnostics.skipped.push(`${node.id}: host ${hostId} was not emitted`);
+    state.diagnostics.skipped.push(`${node.id}: ${missingHostReason(state, hostId)}`);
     return;
   }
 
@@ -736,7 +749,7 @@ function emitBrace(state: EmitState, node: LysNode): void {
   const hostA = hostBaseId ? state.hosts.get(hostBaseId) : undefined;
   const hostB = hostTipId ? state.hosts.get(hostTipId) : undefined;
   if (!hostA || !hostB) {
-    state.diagnostics.skipped.push(`${node.id}: brace host ${!hostA ? hostBaseId : hostTipId} was not emitted`);
+    state.diagnostics.skipped.push(`${node.id}: brace ${missingHostReason(state, !hostA ? hostBaseId : hostTipId)}`);
     return;
   }
 
@@ -855,7 +868,7 @@ function emitKickstand(state: EmitState, node: LysNode): void {
   const hostId = node.hostBaseId ?? node.hostTipId;
   const record = hostId ? state.hosts.get(hostId) : undefined;
   if (!hostId || !record) {
-    state.diagnostics.skipped.push(`${node.id}: kickstand host ${hostId ?? '(none)'} was not emitted`);
+    state.diagnostics.skipped.push(`${node.id}: kickstand ${missingHostReason(state, hostId)}`);
     return;
   }
   const hostKind = record.skeleton.kind;
@@ -976,6 +989,7 @@ export function emitSupportGraph(
     hosts: new Map(),
     hasChildren: new Set(graph.hostEdges.map((edge) => edge.hostId)),
     knotsBySite: new Map(),
+    nodeIds: new Set(graph.nodes.map((n) => n.id)),
     mesh,
     diagnostics,
   };
