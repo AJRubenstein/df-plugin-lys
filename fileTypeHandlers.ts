@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { PluginFileTypeHandler } from '@/features/plugins/pluginFileTypeBridge';
 import type { ModelMeshModifiers } from '@/features/mesh-modifiers/types';
-import type { DragonfruitImportFormat, Joint, Knot } from '@/supports/types';
+import type { DragonfruitImportFormat } from '@/supports/types';
 import { LysParser } from './LysParser';
 import type { LysData, LysObject, LysSupport } from './converter/types';
 import { LysConverter } from './LysConverter';

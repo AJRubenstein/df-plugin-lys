@@ -1,8 +1,5 @@
 import * as THREE from 'three';
-import {
-  DragonfruitImportFormat,
-  Joint,
-} from '@/supports/types';
+import { DragonfruitImportFormat } from '@/supports/types';
 import { SupportSettings } from '@/supports/Settings';
 import type {
   ModelMeshModifiers,
