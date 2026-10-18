@@ -449,12 +449,27 @@ export async function importLysFile(
     geometryKeys: [...data.geometriesByName.keys()],
   });
 
-  // Clone scene data and strip Z rotation for the converter (Z is applied post-conversion).
-  const sceneDataForConvert = JSON.parse(JSON.stringify(data.sceneData));
-  const convertObjects = sceneDataForConvert?.objects?.present?.byId ?? {};
-  for (const key of Object.keys(convertObjects)) {
-    convertObjects[key].rotation = normalizeLysRotation(convertObjects[key].rotation);
+  // Copy only what the converter mutates: the object records whose Z rotation
+  // is stripped for conversion (Z is applied to the whole model afterwards).
+  // A deep clone here copied every support and hole record in the file.
+  const sourceObjects = data.sceneData.objects?.present?.byId ?? {};
+  const convertObjects: Record<string, LysObject> = {};
+  for (const [key, object] of Object.entries(sourceObjects)) {
+    convertObjects[key] = {
+      ...object,
+      rotation: normalizeLysRotation(object.rotation),
+    };
   }
+  const sceneDataForConvert: LysData = {
+    ...data.sceneData,
+    objects: {
+      ...data.sceneData.objects,
+      present: {
+        ...data.sceneData.objects?.present,
+        byId: convertObjects,
+      },
+    },
+  };
 
   // Resolve object->geometry mapping, including heuristic fallbacks.
   const objectsWithGeometry: Array<{

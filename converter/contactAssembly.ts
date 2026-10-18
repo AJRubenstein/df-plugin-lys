@@ -7,6 +7,7 @@ import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtil
 import { calculateDiskThickness } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { LysSupport, LysTipSettings } from './types';
 import { pickDiskStandoff } from './helpers';
+import { raycastMeshBVH } from './meshRaycast';
 import type { TipProfile } from '@/supports/Settings/types';
 
 /**
@@ -132,7 +133,7 @@ export function createContactAssembly(
     const rayOrigin = socketPosVec.clone();
     const rayDir = tipWorld.clone().sub(socketPosVec).normalize();
     raycaster.set(rayOrigin, rayDir);
-    const intersects = raycaster.intersectObject(mesh, false);
+    const intersects = raycastMeshBVH(mesh, raycaster);
 
     if (intersects.length > 0) {
       const hit = intersects[0];

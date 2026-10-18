@@ -14,6 +14,7 @@ import { computeLowestZ } from '@/utils/geometry';
 import { quaternionFromGlobalEulerDegrees } from '@/utils/rotation';
 import { calculateSmoothedNormal } from '@/supports/PlacementLogic/PlacementUtils';
 import { createContactAssembly } from './contactAssembly';
+import { ensureMeshRaycastIndex, raycastMeshBVH } from './meshRaycast';
 import { pickContactTipSettings, pickEndpointTipSettings, pickDiskStandoff, gridColumnHeightMm, inferLeafTipEndpoint, pickLeafEndpointDiameter } from './helpers';
 import { decideKnot, parameterOnSegment, projectOntoSkeleton, type HostSegment, type HostSkeleton } from './knotPolicy';
 import type { LysData, LysObject, LysTipSettings } from './types';
@@ -145,13 +146,13 @@ function raycastSurfaceNormal(
   const meshFrameContact = contactWorld.clone().sub(meshPivotShift);
   const dir = authoredNormal.clone().normalize().multiplyScalar(-1); // travel INTO the surface
   // Originate well outside the mesh so the ray enters from outside the solid.
-  mesh.geometry.computeBoundingSphere();
+  ensureMeshRaycastIndex(mesh);
   const boundingRadius = mesh.geometry.boundingSphere?.radius ?? 0;
   const origin = meshFrameContact.clone().addScaledVector(dir, -(boundingRadius * 2 + 50));
 
   const raycaster = new THREE.Raycaster();
   raycaster.set(origin, dir);
-  const intersects = raycaster.intersectObject(mesh, false);
+  const intersects = raycastMeshBVH(mesh, raycaster);
   if (intersects.length === 0) return fallback;
 
   // Pick the intersection nearest the (compensated) contact point.
