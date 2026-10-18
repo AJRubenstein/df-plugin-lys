@@ -39,6 +39,8 @@ export type LysImportPayload = {
   supportData: ReturnType<typeof LysConverter.convert> | null;
   /** Hollowing configuration and hole punches extracted from LYS scene data. */
   meshModifiers?: ModelMeshModifiers;
+  /** The geometry is model-only; supports arrive separately in supportData. */
+  skipClassification: true;
 };
 
 // ---------------------------------------------------------------------------
@@ -396,6 +398,7 @@ function convertSingleObject(
     transform,
     supportData: dragonfruitData,
     meshModifiers,
+    skipClassification: true,
   };
 }
 
@@ -432,6 +435,7 @@ export async function importLysFile(
       },
       supportData: null,
       meshModifiers: LysConverter.convertHollowing(data.sceneData, data.geometry, data.geometriesByName),
+      skipClassification: true,
     };
   }
 
